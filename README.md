@@ -1,0 +1,1 @@
+Goods4Goods is a barter-based marketplace designed to encourage fair trades and reduce overconsumption through reuse of products. 
