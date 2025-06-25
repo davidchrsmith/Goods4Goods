@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Existing keys... -->
+    
+    <key>NSCameraUsageDescription</key>
+    <string>This app needs access to camera to take photos of items for trading</string>
+    
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>This app needs access to photo library to select images of items for trading</string>
+    
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>This app uses location to show nearby trading opportunities</string>
+    
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app needs microphone access for voice messages</string>
+</dict>
+</plist>
