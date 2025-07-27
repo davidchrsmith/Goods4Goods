@@ -6,29 +6,31 @@ import { supabase } from "../lib/supabase"
 import { Button, Input } from "@rneui/themed"
 
 export default function Auth() {
-  const [phone, setPhone] = useState("")
+  const [email, setEmail] = useState("") // Changed from phone to email
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [isSignUp, setIsSignUp] = useState(false)
 
-  async function signInWithPhone() {
+  async function signInWithEmail() {
+    // Renamed function
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({
-      phone: phone,
+      email: email, // Changed to email
       password: password,
     })
     if (error) Alert.alert("Error", error.message)
     setLoading(false)
   }
 
-  async function signUpWithPhone() {
+  async function signUpWithEmail() {
+    // Renamed function
     setLoading(true)
     const { error } = await supabase.auth.signUp({
-      phone: phone,
+      email: email, // Changed to email
       password: password,
     })
     if (error) Alert.alert("Error", error.message)
-    else Alert.alert("Success", "Check your phone for verification!")
+    else Alert.alert("Success", "Check your email for verification!" + (error?.message ? `\n${error.message}` : "")) // Updated message
     setLoading(false)
   }
 
@@ -41,12 +43,12 @@ export default function Auth() {
 
       <View style={styles.form}>
         <Input
-          label="Phone Number"
-          leftIcon={{ type: "feather", name: "phone" }}
-          onChangeText={(text) => setPhone(text)}
-          value={phone}
-          placeholder="+1234567890"
-          keyboardType="phone-pad"
+          label="Email" // Changed label
+          leftIcon={{ type: "feather", name: "mail" }} // Changed icon
+          onChangeText={(text) => setEmail(text)} // Changed to setEmail
+          value={email} // Changed to email
+          placeholder="email@address.com" // Changed placeholder
+          keyboardType="email-address" // Changed keyboardType
           autoCapitalize="none"
           containerStyle={styles.inputContainer}
         />
@@ -65,7 +67,7 @@ export default function Auth() {
         <Button
           title={loading ? "Loading..." : isSignUp ? "Sign Up" : "Sign In"}
           disabled={loading}
-          onPress={isSignUp ? signUpWithPhone : signInWithPhone}
+          onPress={isSignUp ? signUpWithEmail : signInWithEmail} // Changed function calls
           buttonStyle={styles.primaryButton}
           titleStyle={styles.buttonText}
         />
