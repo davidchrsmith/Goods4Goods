@@ -16,7 +16,7 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [fullName, setFullName] = useState("")
-  const [phone, setPhone] = useState("")
+  // Removed phone state as it's no longer used for authentication/profile update
 
   useEffect(() => {
     if (session) getProfile()
@@ -36,7 +36,7 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
       if (data) {
         setProfile(data)
         setFullName(data.full_name || "")
-        setPhone(data.phone || "")
+        // Phone is no longer fetched/set here
       }
     } catch (error) {
       if (error instanceof Error) {
@@ -55,7 +55,7 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
       const updates = {
         id: session.user.id,
         full_name: fullName,
-        phone: phone,
+        // Removed phone from updates
         updated_at: new Date().toISOString(),
       }
 
@@ -94,7 +94,8 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
           containerStyle={styles.inputContainer}
         />
 
-        <Input
+        {/* Removed Phone Number Input Field */}
+        {/* <Input
           label="Phone Number"
           value={phone}
           onChangeText={setPhone}
@@ -102,7 +103,7 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
           keyboardType="phone-pad"
           leftIcon={{ type: "feather", name: "phone" }}
           containerStyle={styles.inputContainer}
-        />
+        /> */}
 
         <Button
           title={loading ? "Updating..." : "Complete Profile"}
