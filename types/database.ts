@@ -90,6 +90,53 @@ export interface Database {
           updated_at?: string
         }
       }
+      conversations: {
+        Row: {
+          id: string
+          user1_id: string
+          user2_id: string
+          trade_request_id: string | null
+          last_message_at: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user1_id: string
+          user2_id: string
+          trade_request_id?: string | null
+          last_message_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          last_message_at?: string
+          updated_at?: string
+        }
+      }
+      messages: {
+        Row: {
+          id: string
+          conversation_id: string
+          sender_id: string
+          content: string
+          is_read: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          conversation_id: string
+          sender_id: string
+          content: string
+          is_read?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          is_read?: boolean
+        }
+      }
     }
   }
 }
@@ -97,3 +144,5 @@ export interface Database {
 export type Profile = Database["public"]["Tables"]["profiles"]["Row"]
 export type Item = Database["public"]["Tables"]["items"]["Row"]
 export type TradeRequest = Database["public"]["Tables"]["trade_requests"]["Row"]
+export type Conversation = Database["public"]["Tables"]["conversations"]["Row"]
+export type Message = Database["public"]["Tables"]["messages"]["Row"]
