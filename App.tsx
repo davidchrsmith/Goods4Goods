@@ -12,6 +12,8 @@ import ProfileComponent from "./components/Profile"
 import SwipeCards from "./components/SwipeCards"
 import AddItem from "./components/AddItem"
 import TradeRequests from "./components/TradeRequests"
+import MessagesList from "./components/MessagesList"
+import ChatScreen from "./components/ChatScreen"
 import Navigation from "./components/Navigation"
 
 export default function App() {
@@ -19,6 +21,9 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("discover")
+
+  // Chat state
+  const [selectedConversation, setSelectedConversation] = useState<any>(null)
 
   useEffect(() => {
     // Get initial session
@@ -73,6 +78,14 @@ export default function App() {
     setActiveTab("discover")
   }
 
+  const handleConversationSelect = (conversation: any) => {
+    setSelectedConversation(conversation)
+  }
+
+  const handleBackToMessages = () => {
+    setSelectedConversation(null)
+  }
+
   if (loading) {
     return <View style={styles.loading} />
   }
@@ -87,6 +100,18 @@ export default function App() {
     return <ProfileComponent session={session} onProfileComplete={handleProfileComplete} />
   }
 
+  // Show chat screen if conversation is selected
+  if (selectedConversation) {
+    return (
+      <ChatScreen
+        session={session}
+        conversationId={selectedConversation.id}
+        otherUser={selectedConversation.other_user}
+        onBack={handleBackToMessages}
+      />
+    )
+  }
+
   // Main app content
   const renderActiveTab = () => {
     switch (activeTab) {
@@ -96,6 +121,8 @@ export default function App() {
         return <AddItem session={session} onItemAdded={handleItemAdded} />
       case "requests":
         return <TradeRequests session={session} />
+      case "messages":
+        return <MessagesList session={session} onConversationSelect={handleConversationSelect} />
       case "profile":
         return <ProfileComponent session={session} onProfileComplete={handleProfileComplete} />
       default:
