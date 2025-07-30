@@ -47,6 +47,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       setLoading(true)
 
       // Get conversations where user is participant
+      // Since user1_id is always < user2_id, we need to check both positions
       const { data: conversationsData, error: conversationsError } = await supabase
         .from("conversations")
         .select("*")
@@ -63,6 +64,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       // Get other user profiles and last messages for each conversation
       const conversationsWithDetails = await Promise.all(
         conversationsData.map(async (conversation) => {
+          // Determine the other user ID based on the ordered constraint
           const otherUserId = conversation.user1_id === session.user.id ? conversation.user2_id : conversation.user1_id
 
           // Get other user's profile
