@@ -5,7 +5,7 @@ A peer-to-peer barter marketplace built with React Native and Supabase.
 ## Features
 
 - 📱 Cross-platform (iOS, Android, Web)
-- 🔐 Phone number authentication
+- 📧 In-app messaging system
 - 📸 Item listing with image upload
 - 💫 Tinder-style discovery interface
 - 🤝 Trade request system
