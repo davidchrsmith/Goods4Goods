@@ -11,6 +11,7 @@ import Auth from "./components/Auth"
 import ProfileComponent from "./components/Profile"
 import SwipeCards from "./components/SwipeCards"
 import AddItem from "./components/AddItem"
+import MyItems from "./components/MyItems"
 import TradeRequests from "./components/TradeRequests"
 import MessagesList from "./components/MessagesList"
 import ChatScreen from "./components/ChatScreen"
@@ -75,7 +76,7 @@ export default function App() {
   }
 
   const handleItemAdded = () => {
-    setActiveTab("discover")
+    setActiveTab("my-items") // Navigate to My Items after adding an item
   }
 
   const handleConversationSelect = (conversation: any) => {
@@ -119,6 +120,8 @@ export default function App() {
         return <SwipeCards session={session} />
       case "add":
         return <AddItem session={session} onItemAdded={handleItemAdded} />
+      case "my-items":
+        return <MyItems session={session} />
       case "requests":
         return <TradeRequests session={session} />
       case "messages":

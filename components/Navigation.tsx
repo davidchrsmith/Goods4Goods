@@ -10,8 +10,9 @@ export default function Navigation({ activeTab, onTabChange }: NavigationProps) 
   const tabs = [
     { id: "discover", label: "Discover", icon: "heart" },
     { id: "add", label: "Add Item", icon: "plus-circle" },
+    { id: "my-items", label: "My Items", icon: "package" }, // Added My Items tab
     { id: "requests", label: "Requests", icon: "message-circle" },
-    { id: "messages", label: "Messages", icon: "message-square" }, // Added messages tab
+    { id: "messages", label: "Messages", icon: "message-square" },
     { id: "profile", label: "Profile", icon: "user" },
   ]
 
@@ -23,7 +24,7 @@ export default function Navigation({ activeTab, onTabChange }: NavigationProps) 
           style={[styles.tab, activeTab === tab.id && styles.activeTab]}
           onPress={() => onTabChange(tab.id)}
         >
-          <Feather name={tab.icon as any} size={20} color={activeTab === tab.id ? "#3b82f6" : "#64748b"} />
+          <Feather name={tab.icon as any} size={18} color={activeTab === tab.id ? "#3b82f6" : "#64748b"} />
           <Text style={[styles.tabLabel, activeTab === tab.id && styles.activeTabLabel]}>{tab.label}</Text>
         </TouchableOpacity>
       ))}
@@ -48,10 +49,10 @@ const styles = StyleSheet.create({
   activeTab: {
     backgroundColor: "#eff6ff",
     borderRadius: 12,
-    marginHorizontal: 2,
+    marginHorizontal: 1,
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 9,
     color: "#64748b",
     marginTop: 4,
     fontWeight: "500",
