@@ -38,7 +38,6 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 
 - Python-based item valuation using web scraping
 - Advanced matching algorithms
-- In-app messaging system
 - Location-based filtering
 - Push notifications
 \`\`\`
