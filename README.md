@@ -19,12 +19,12 @@ A peer-to-peer barter marketplace built with React Native and Supabase.
 - **Authentication**: Supabase Auth
 - **UI**: React Native Elements
 
-## Setup
+## Current Setup
 
 1. Clone the repository
 2. Install dependencies: `npm install`
-3. Set up Supabase project and add environment variables
-4. Run the app: `expo start`
+3. Create .env file and add Supabase credentials
+4. Run the app: `npx expo start --clear`
 
 ## Environment Variables
 
