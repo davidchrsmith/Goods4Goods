@@ -6,6 +6,7 @@ export interface Database {
           id: string
           phone: string | null
           full_name: string | null
+          username: string | null
           avatar_url: string | null
           created_at: string
           updated_at: string
@@ -14,6 +15,7 @@ export interface Database {
           id: string
           phone?: string | null
           full_name?: string | null
+          username?: string | null
           avatar_url?: string | null
           created_at?: string
           updated_at?: string
@@ -22,6 +24,7 @@ export interface Database {
           id?: string
           phone?: string | null
           full_name?: string | null
+          username?: string | null
           avatar_url?: string | null
           updated_at?: string
         }
@@ -137,6 +140,29 @@ export interface Database {
           is_read?: boolean
         }
       }
+      friendships: {
+        Row: {
+          id: string
+          requester_id: string
+          addressee_id: string
+          status: "pending" | "accepted" | "declined" | "blocked"
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          requester_id: string
+          addressee_id: string
+          status?: "pending" | "accepted" | "declined" | "blocked"
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          status?: "pending" | "accepted" | "declined" | "blocked"
+          updated_at?: string
+        }
+      }
     }
   }
 }
@@ -146,3 +172,4 @@ export type Item = Database["public"]["Tables"]["items"]["Row"]
 export type TradeRequest = Database["public"]["Tables"]["trade_requests"]["Row"]
 export type Conversation = Database["public"]["Tables"]["conversations"]["Row"]
 export type Message = Database["public"]["Tables"]["messages"]["Row"]
+export type Friendship = Database["public"]["Tables"]["friendships"]["Row"]

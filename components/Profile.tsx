@@ -58,7 +58,7 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
   }
 
   // Show profile setup if profile is incomplete
-  if (!profile || !profile.full_name) {
+  if (!profile || !profile.full_name || !profile.username) {
     return <ProfileSetup session={session} onProfileComplete={onProfileComplete} />
   }
 
@@ -92,8 +92,8 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
         </View>
 
         <Text style={styles.profileName}>{profile.full_name}</Text>
-        <Text style={styles.profileEmail}>{session.user.email}</Text>
-        {profile.phone && <Text style={styles.profilePhone}>{profile.phone}</Text>}
+        <Text style={styles.profileUsername}>@{profile.username}</Text>
+        {/* Remove the email and phone display from header */}
       </View>
 
       <View style={styles.content}>
@@ -110,7 +110,7 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Text style={styles.statNumber}>0</Text>
-            <Text style={styles.statLabel}>Reviews</Text>
+            <Text style={styles.statLabel}>Friends</Text>
           </View>
         </View>
 
@@ -120,6 +120,11 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
           <View style={styles.infoItem}>
             <Feather name="calendar" size={20} color="#64748b" />
             <Text style={styles.infoText}>Joined {formatDate(profile.created_at)}</Text>
+          </View>
+
+          <View style={styles.infoItem}>
+            <Feather name="at-sign" size={20} color="#64748b" />
+            <Text style={styles.infoText}>@{profile.username}</Text>
           </View>
 
           <View style={styles.infoItem}>
@@ -186,9 +191,32 @@ function ProfileSettings({
 }) {
   const [loading, setLoading] = useState(false)
   const [fullName, setFullName] = useState(profile?.full_name || "")
+  const [username, setUsername] = useState(profile?.username || "")
   const [phone, setPhone] = useState(profile?.phone || "")
   const [avatarUrl, setAvatarUrl] = useState<string | null>(profile?.avatar_url || null)
   const [uploading, setUploading] = useState(false)
+  const [usernameError, setUsernameError] = useState("")
+
+  const validateUsername = (text: string) => {
+    const cleanText = text.toLowerCase().replace(/[^a-z0-9_]/g, "")
+    setUsername(cleanText)
+
+    if (cleanText.length < 3) {
+      setUsernameError("Username must be at least 3 characters")
+    } else if (cleanText.length > 20) {
+      setUsernameError("Username must be less than 20 characters")
+    } else {
+      setUsernameError("")
+    }
+  }
+
+  const checkUsernameAvailability = async (username: string) => {
+    if (username === profile?.username) return true // Same username is OK
+
+    const { data, error } = await supabase.from("profiles").select("username").eq("username", username).single()
+
+    return !data // Available if no data found
+  }
 
   const pickImage = async () => {
     const ImagePicker = await import("expo-image-picker")
@@ -247,9 +275,16 @@ function ProfileSettings({
       setLoading(true)
       if (!session?.user) throw new Error("No user on the session!")
 
+      // Check username availability
+      if (username && !(await checkUsernameAvailability(username))) {
+        Alert.alert("Username Taken", "This username is already taken. Please choose another.")
+        return
+      }
+
       const updates = {
         id: session.user.id,
         full_name: fullName.trim(),
+        username: username.trim() || null,
         phone: phone.trim() || null,
         avatar_url: avatarUrl,
         updated_at: new Date().toISOString(),
@@ -258,6 +293,11 @@ function ProfileSettings({
       const { error } = await supabase.from("profiles").upsert(updates)
 
       if (error) {
+        if (error.code === "23505") {
+          // Unique constraint violation
+          Alert.alert("Username Taken", "This username is already taken. Please choose another.")
+          return
+        }
         throw error
       }
 
@@ -330,6 +370,24 @@ function ProfileSettings({
         </View>
 
         <View style={styles.inputSection}>
+          <Text style={styles.inputLabel}>Username *</Text>
+          <View style={[styles.inputContainer, usernameError ? styles.errorInput : null]}>
+            <Feather name="at-sign" size={20} color="#64748b" style={styles.inputIcon} />
+            <TextInput
+              style={styles.textInput}
+              value={username}
+              onChangeText={validateUsername}
+              placeholder="Choose a unique username"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="none"
+              maxLength={20}
+            />
+          </View>
+          {usernameError ? <Text style={styles.errorText}>{usernameError}</Text> : null}
+          <Text style={styles.inputHint}>Letters, numbers, and underscores only. 3-20 characters.</Text>
+        </View>
+
+        <View style={styles.inputSection}>
           <Text style={styles.inputLabel}>Phone Number</Text>
           <View style={styles.inputContainer}>
             <Feather name="phone" size={20} color="#64748b" style={styles.inputIcon} />
@@ -362,7 +420,7 @@ function ProfileSettings({
         <Button
           title={loading ? "Updating..." : isFirstTime ? "Complete Profile" : "Save Changes"}
           onPress={updateProfile}
-          disabled={loading || !fullName.trim() || uploading}
+          disabled={loading || !fullName.trim() || !username.trim() || !!usernameError || uploading}
           buttonStyle={styles.saveButton}
           titleStyle={styles.saveButtonText}
         />
@@ -407,6 +465,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: "bold",
     color: "#1e293b",
+    marginBottom: 4,
+  },
+  profileUsername: {
+    fontSize: 18,
+    color: "#3b82f6",
+    fontWeight: "600",
     marginBottom: 4,
   },
   profileEmail: {
@@ -619,6 +683,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
     borderColor: "#e2e8f0",
   },
+  errorInput: {
+    borderColor: "#ef4444",
+    backgroundColor: "#fef2f2",
+  },
   inputIcon: {
     marginRight: 12,
   },
@@ -633,6 +701,11 @@ const styles = StyleSheet.create({
   inputHint: {
     fontSize: 12,
     color: "#94a3b8",
+    marginTop: 4,
+  },
+  errorText: {
+    fontSize: 12,
+    color: "#ef4444",
     marginTop: 4,
   },
   saveButton: {
