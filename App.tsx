@@ -5,6 +5,7 @@ import { View, StyleSheet } from "react-native"
 import { supabase } from "./lib/supabase"
 import type { Session } from "@supabase/supabase-js"
 import type { Profile } from "./types/database"
+import usePushNotifications from "../hooks/usePushNotifications"
 
 // Components
 import Auth from "./components/Auth"
@@ -25,6 +26,8 @@ export default function App() {
 
   // Chat state
   const [selectedConversation, setSelectedConversation] = useState<any>(null)
+
+  usePushNotifications(session)
 
   useEffect(() => {
     // Get initial session
