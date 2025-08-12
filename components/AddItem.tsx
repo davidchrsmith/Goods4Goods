@@ -222,6 +222,7 @@ export default function AddItem({ session, onItemAdded }: AddItemProps) {
               selectedValue={condition}
               onValueChange={(itemValue) => setCondition(itemValue)}
               style={styles.picker}
+              itemStyle={styles.pickerItem}
             >
               {CONDITIONS.map((cond) => (
                 <Picker.Item key={cond} label={cond} value={cond} />
@@ -338,9 +339,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 8,
+    backgroundColor: "#f8fafc",
+    overflow: "hidden",
   },
   picker: {
     height: 50,
+    width: "100%",
+  },
+  pickerItem: {
+    fontSize: 16,
+    height: 50,
+    color: "#1e293b",
+    textAlign: "center",
   },
   imageSection: {
     marginBottom: 20,

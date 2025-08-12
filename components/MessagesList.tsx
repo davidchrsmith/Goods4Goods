@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from "react-native"
 import { supabase } from "../lib/supabase"
 import type { Session } from "@supabase/supabase-js"
-import type { Conversation, Profile, Message, Friendship } from "../types/database"
+import type { Conversation, Profile, Message, Friendship, TradeRequest, Item } from "../types/database"
 import { Avatar, Button } from "@rneui/themed"
 import { Feather } from "@expo/vector-icons"
 import FriendSearch from "./FriendSearch"
@@ -22,18 +22,33 @@ interface ConversationWithDetails extends Conversation {
 
 interface FriendRequestWithProfile extends Friendship {
   requester_profile: Profile
+  addressee_profile?: Profile
+}
+
+interface TradeRequestWithDetails extends TradeRequest {
+  requester_item: Item
+  target_item: Item
+  requester_profile?: Profile
+  target_profile?: Profile
 }
 
 export default function MessagesList({ session, onConversationSelect }: MessagesListProps) {
   const [conversations, setConversations] = useState<ConversationWithDetails[]>([])
   const [friendRequests, setFriendRequests] = useState<FriendRequestWithProfile[]>([])
+  const [tradeRequests, setTradeRequests] = useState<TradeRequestWithDetails[]>([])
+  const [outgoingFriendRequests, setOutgoingFriendRequests] = useState<FriendRequestWithProfile[]>([])
+  const [outgoingTradeRequests, setOutgoingTradeRequests] = useState<TradeRequestWithDetails[]>([])
   const [loading, setLoading] = useState(true)
   const [showFriendSearch, setShowFriendSearch] = useState(false)
   const [activeTab, setActiveTab] = useState<"messages" | "requests">("messages")
+  const [requestsSubTab, setRequestsSubTab] = useState<"incoming" | "outgoing">("incoming")
 
   useEffect(() => {
     loadConversations()
     loadFriendRequests()
+    loadTradeRequests()
+    loadOutgoingFriendRequests()
+    loadOutgoingTradeRequests()
 
     // Subscribe to real-time updates
     const conversationsSubscription = supabase
@@ -51,10 +66,16 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       .on("postgres_changes", { event: "*", schema: "public", table: "friendships" }, () => loadFriendRequests())
       .subscribe()
 
+    const tradeRequestsSubscription = supabase
+      .channel("trade_requests")
+      .on("postgres_changes", { event: "*", schema: "public", table: "trade_requests" }, () => loadTradeRequests())
+      .subscribe()
+
     return () => {
       conversationsSubscription.unsubscribe()
       messagesSubscription.unsubscribe()
       friendshipsSubscription.unsubscribe()
+      tradeRequestsSubscription.unsubscribe()
     }
   }, [])
 
@@ -147,6 +168,70 @@ export default function MessagesList({ session, onConversationSelect }: Messages
     }
   }
 
+  async function loadTradeRequests() {
+    try {
+      const { data, error } = await supabase
+        .from("trade_requests")
+        .select(`
+          *,
+          requester_item:items!trade_requests_requester_item_id_fkey(*),
+          target_item:items!trade_requests_target_item_id_fkey(*),
+          requester_profile:profiles!trade_requests_requester_id_fkey(*)
+        `)
+        .eq("target_user_id", session.user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+
+      if (error) throw error
+
+      setTradeRequests(data || [])
+    } catch (error) {
+      console.error("Error loading trade requests:", error)
+    }
+  }
+
+  async function loadOutgoingFriendRequests() {
+    try {
+      const { data, error } = await supabase
+        .from("friendships")
+        .select(`
+        *,
+        addressee_profile:profiles!friendships_addressee_id_fkey(*)
+      `)
+        .eq("requester_id", session.user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+
+      if (error) throw error
+
+      setOutgoingFriendRequests(data || [])
+    } catch (error) {
+      console.error("Error loading outgoing friend requests:", error)
+    }
+  }
+
+  async function loadOutgoingTradeRequests() {
+    try {
+      const { data, error } = await supabase
+        .from("trade_requests")
+        .select(`
+        *,
+        requester_item:items!trade_requests_requester_item_id_fkey(*),
+        target_item:items!trade_requests_target_item_id_fkey(*),
+        target_profile:profiles!trade_requests_target_user_id_fkey(*)
+      `)
+        .eq("requester_id", session.user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+
+      if (error) throw error
+
+      setOutgoingTradeRequests(data || [])
+    } catch (error) {
+      console.error("Error loading outgoing trade requests:", error)
+    }
+  }
+
   async function respondToFriendRequest(requestId: string, status: "accepted" | "declined") {
     try {
       const { error } = await supabase
@@ -167,6 +252,26 @@ export default function MessagesList({ session, onConversationSelect }: Messages
     }
   }
 
+  async function respondToTradeRequest(requestId: string, status: "accepted" | "declined") {
+    try {
+      const { error } = await supabase
+        .from("trade_requests")
+        .update({
+          status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", requestId)
+
+      if (error) throw error
+
+      Alert.alert("Success", status === "accepted" ? "Trade request accepted!" : "Trade request declined")
+      loadTradeRequests()
+    } catch (error) {
+      console.error("Error responding to trade request:", error)
+      Alert.alert("Error", "Failed to respond to trade request")
+    }
+  }
+
   const formatTime = (dateString: string) => {
     const date = new Date(dateString)
     const now = new Date()
@@ -178,6 +283,9 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       return date.toLocaleDateString()
     }
   }
+
+  const totalRequests =
+    friendRequests.length + tradeRequests.length + outgoingFriendRequests.length + outgoingTradeRequests.length
 
   if (showFriendSearch) {
     return <FriendSearch session={session} onBack={() => setShowFriendSearch(false)} />
@@ -215,7 +323,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
           onPress={() => setActiveTab("requests")}
         >
           <Text style={[styles.tabText, activeTab === "requests" && styles.activeTabText]}>
-            Friend Requests ({friendRequests.length})
+            Requests ({totalRequests})
           </Text>
         </TouchableOpacity>
       </View>
@@ -264,47 +372,182 @@ export default function MessagesList({ session, onConversationSelect }: Messages
               <Text style={styles.emptySubtitle}>Start trading or add friends to begin conversations!</Text>
             </View>
           )
-        ) : friendRequests.length > 0 ? (
-          friendRequests.map((request) => (
-            <View key={request.id} style={styles.friendRequestCard}>
-              <Avatar
-                size={50}
-                rounded
-                source={
-                  request.requester_profile.avatar_url ? { uri: request.requester_profile.avatar_url } : undefined
-                }
-                icon={!request.requester_profile.avatar_url ? { name: "user", type: "feather" } : undefined}
-                containerStyle={styles.avatar}
-              />
-
-              <View style={styles.requestContent}>
-                <Text style={styles.requestTitle}>Friend Request</Text>
-                <Text style={styles.requestUser}>
-                  {request.requester_profile.full_name} (@{request.requester_profile.username}) wants to be friends
-                </Text>
-                <Text style={styles.requestTime}>{formatTime(request.created_at)}</Text>
-
-                <View style={styles.requestActions}>
-                  <Button
-                    title="Decline"
-                    onPress={() => respondToFriendRequest(request.id, "declined")}
-                    buttonStyle={styles.declineButton}
-                    titleStyle={styles.declineButtonText}
-                  />
-                  <Button
-                    title="Accept"
-                    onPress={() => respondToFriendRequest(request.id, "accepted")}
-                    buttonStyle={styles.acceptButton}
-                    titleStyle={styles.acceptButtonText}
-                  />
-                </View>
-              </View>
-            </View>
-          ))
         ) : (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No Friend Requests</Text>
-            <Text style={styles.emptySubtitle}>Friend requests will appear here when someone wants to connect</Text>
+          <View>
+            <View style={styles.subTabs}>
+              <TouchableOpacity
+                style={[styles.subTab, requestsSubTab === "incoming" && styles.activeSubTab]}
+                onPress={() => setRequestsSubTab("incoming")}
+              >
+                <Text style={[styles.subTabText, requestsSubTab === "incoming" && styles.activeSubTabText]}>
+                  Incoming ({friendRequests.length + tradeRequests.length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.subTab, requestsSubTab === "outgoing" && styles.activeSubTab]}
+                onPress={() => setRequestsSubTab("outgoing")}
+              >
+                <Text style={[styles.subTabText, requestsSubTab === "outgoing" && styles.activeSubTabText]}>
+                  Outgoing ({outgoingFriendRequests.length + outgoingTradeRequests.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {requestsSubTab === "incoming" ? (
+              <View>
+                {/* Existing incoming requests code */}
+                {friendRequests.length > 0 && (
+                  <View style={styles.requestSection}>
+                    <Text style={styles.sectionTitle}>Friend Requests</Text>
+                    {friendRequests.map((request) => (
+                      <View key={request.id} style={styles.requestCard}>
+                        <Avatar
+                          size={50}
+                          rounded
+                          source={
+                            request.requester_profile.avatar_url
+                              ? { uri: request.requester_profile.avatar_url }
+                              : undefined
+                          }
+                          icon={!request.requester_profile.avatar_url ? { name: "user", type: "feather" } : undefined}
+                          containerStyle={styles.avatar}
+                        />
+
+                        <View style={styles.requestContent}>
+                          <Text style={styles.requestTitle}>Friend Request</Text>
+                          <Text style={styles.requestUser}>
+                            {request.requester_profile.full_name} (@{request.requester_profile.username}) wants to be
+                            friends
+                          </Text>
+                          <Text style={styles.requestTime}>{formatTime(request.created_at)}</Text>
+
+                          <View style={styles.requestActions}>
+                            <Button
+                              title="Decline"
+                              onPress={() => respondToFriendRequest(request.id, "declined")}
+                              buttonStyle={styles.declineButton}
+                              titleStyle={styles.declineButtonText}
+                            />
+                            <Button
+                              title="Accept"
+                              onPress={() => respondToFriendRequest(request.id, "accepted")}
+                              buttonStyle={styles.acceptButton}
+                              titleStyle={styles.acceptButtonText}
+                            />
+                          </View>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {tradeRequests.length > 0 && (
+                  <View style={styles.requestSection}>
+                    <Text style={styles.sectionTitle}>Trade Requests</Text>
+                    {tradeRequests.map((request) => (
+                      <View key={request.id} style={styles.tradeRequestCard}>
+                        <View style={styles.tradeRequestHeader}>
+                          <Text style={styles.requestTitle}>Trade Request</Text>
+                          <Text style={styles.requestTime}>{formatTime(request.created_at)}</Text>
+                        </View>
+
+                        <View style={styles.tradeDetails}>
+                          <Text style={styles.tradeText}>
+                            {request.requester_profile.full_name} wants to trade their{" "}
+                            <Text style={styles.itemName}>{request.requester_item.title}</Text> for your{" "}
+                            <Text style={styles.itemName}>{request.target_item.title}</Text>
+                          </Text>
+                        </View>
+
+                        <View style={styles.requestActions}>
+                          <Button
+                            title="Decline"
+                            onPress={() => respondToTradeRequest(request.id, "declined")}
+                            buttonStyle={styles.declineButton}
+                            titleStyle={styles.declineButtonText}
+                          />
+                          <Button
+                            title="Accept"
+                            onPress={() => respondToTradeRequest(request.id, "accepted")}
+                            buttonStyle={styles.acceptButton}
+                            titleStyle={styles.acceptButtonText}
+                          />
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {friendRequests.length === 0 && tradeRequests.length === 0 && (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No Incoming Requests</Text>
+                    <Text style={styles.emptySubtitle}>Friend and trade requests you receive will appear here</Text>
+                  </View>
+                )}
+              </View>
+            ) : (
+              <View>
+                {/* Outgoing requests */}
+                {outgoingFriendRequests.length > 0 && (
+                  <View style={styles.requestSection}>
+                    <Text style={styles.sectionTitle}>Friend Requests Sent</Text>
+                    {outgoingFriendRequests.map((request) => (
+                      <View key={request.id} style={styles.requestCard}>
+                        <Avatar
+                          size={50}
+                          rounded
+                          source={
+                            request.addressee_profile.avatar_url
+                              ? { uri: request.addressee_profile.avatar_url }
+                              : undefined
+                          }
+                          icon={!request.addressee_profile.avatar_url ? { name: "user", type: "feather" } : undefined}
+                          containerStyle={styles.avatar}
+                        />
+
+                        <View style={styles.requestContent}>
+                          <Text style={styles.requestTitle}>Friend Request Sent</Text>
+                          <Text style={styles.requestUser}>
+                            Waiting for {request.addressee_profile.full_name} (@{request.addressee_profile.username}) to
+                            respond
+                          </Text>
+                          <Text style={styles.requestTime}>Sent {formatTime(request.created_at)}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {outgoingTradeRequests.length > 0 && (
+                  <View style={styles.requestSection}>
+                    <Text style={styles.sectionTitle}>Trade Requests Sent</Text>
+                    {outgoingTradeRequests.map((request) => (
+                      <View key={request.id} style={styles.tradeRequestCard}>
+                        <View style={styles.tradeRequestHeader}>
+                          <Text style={styles.requestTitle}>Trade Request Sent</Text>
+                          <Text style={styles.requestTime}>Sent {formatTime(request.created_at)}</Text>
+                        </View>
+
+                        <View style={styles.tradeDetails}>
+                          <Text style={styles.tradeText}>
+                            You offered your <Text style={styles.itemName}>{request.requester_item.title}</Text> for{" "}
+                            {request.target_profile.full_name}'s{" "}
+                            <Text style={styles.itemName}>{request.target_item.title}</Text>
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {outgoingFriendRequests.length === 0 && outgoingTradeRequests.length === 0 && (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No Outgoing Requests</Text>
+                    <Text style={styles.emptySubtitle}>Friend and trade requests you send will appear here</Text>
+                  </View>
+                )}
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -425,12 +668,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginLeft: 8,
   },
-  unreadCount: {
-    color: "white",
-    fontSize: 12,
-    fontWeight: "600",
+  requestSection: {
+    marginBottom: 20,
   },
-  friendRequestCard: {
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#1e293b",
+    marginHorizontal: 20,
+    marginBottom: 12,
+  },
+  requestCard: {
     flexDirection: "row",
     backgroundColor: "white",
     margin: 16,
@@ -442,6 +690,24 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 4,
+  },
+  tradeRequestCard: {
+    backgroundColor: "white",
+    margin: 16,
+    marginBottom: 8,
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  tradeRequestHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
   },
   requestContent: {
     flex: 1,
@@ -462,6 +728,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#94a3b8",
     marginBottom: 12,
+  },
+  tradeDetails: {
+    marginBottom: 16,
+  },
+  tradeText: {
+    fontSize: 14,
+    color: "#64748b",
+    lineHeight: 20,
+  },
+  itemName: {
+    fontWeight: "600",
+    color: "#1e293b",
   },
   requestActions: {
     flexDirection: "row",
@@ -507,5 +785,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#64748b",
     textAlign: "center",
+  },
+  subTabs: {
+    flexDirection: "row",
+    backgroundColor: "#f8fafc",
+    marginHorizontal: 20,
+    marginBottom: 16,
+    borderRadius: 8,
+    padding: 2,
+  },
+  subTab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderRadius: 6,
+  },
+  activeSubTab: {
+    backgroundColor: "white",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  subTabText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748b",
+  },
+  activeSubTabText: {
+    color: "#3b82f6",
   },
 })

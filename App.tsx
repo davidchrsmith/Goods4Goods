@@ -12,7 +12,6 @@ import ProfileComponent from "./components/Profile"
 import SwipeCards from "./components/SwipeCards"
 import AddItem from "./components/AddItem"
 import MyItems from "./components/MyItems"
-import TradeRequests from "./components/TradeRequests"
 import MessagesList from "./components/MessagesList"
 import ChatScreen from "./components/ChatScreen"
 import Navigation from "./components/Navigation"
@@ -122,8 +121,6 @@ export default function App() {
         return <AddItem session={session} onItemAdded={handleItemAdded} />
       case "my-items":
         return <MyItems session={session} />
-      case "requests":
-        return <TradeRequests session={session} />
       case "messages":
         return <MessagesList session={session} onConversationSelect={handleConversationSelect} />
       case "profile":
