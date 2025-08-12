@@ -8,6 +8,10 @@ export interface Database {
           full_name: string | null
           username: string | null
           avatar_url: string | null
+          latitude: number | null
+          longitude: number | null
+          location_name: string | null
+          location_updated_at: string | null
           created_at: string
           updated_at: string
         }
@@ -17,6 +21,10 @@ export interface Database {
           full_name?: string | null
           username?: string | null
           avatar_url?: string | null
+          latitude?: number | null
+          longitude?: number | null
+          location_name?: string | null
+          location_updated_at?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -26,6 +34,10 @@ export interface Database {
           full_name?: string | null
           username?: string | null
           avatar_url?: string | null
+          latitude?: number | null
+          longitude?: number | null
+          location_name?: string | null
+          location_updated_at?: string | null
           updated_at?: string
         }
       }
