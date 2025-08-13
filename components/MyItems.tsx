@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Image, Pressable } from "react-native"
+import { View, Text, StyleSheet, ScrollView, Alert, Image, Pressable } from "react-native"
 import { supabase } from "../lib/supabase"
 import type { Session } from "@supabase/supabase-js"
 import type { Item } from "../types/database"
@@ -60,52 +60,60 @@ export default function MyItems({ session }: MyItemsProps) {
 
       addDebugLog(`Action: ${action}, New availability: ${newAvailability}`)
 
-      // For web testing, let's skip the confirmation dialog initially
-      try {
-        addDebugLog("Proceeding with Supabase update...")
+      // Proceed directly without confirmation
+      addDebugLog("Proceeding with Supabase update...")
 
-        const { data, error } = await supabase
-          .from("items")
-          .update({
-            is_available: newAvailability,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", itemId)
-          .eq("user_id", session.user.id)
-          .select()
+      // Delete associated trade requests first
+      const { error: tradeRequestError } = await supabase
+        .from("trade_requests")
+        .delete()
+        .or(`requester_item_id.eq.${itemId},target_item_id.eq.${itemId}`)
 
-        addDebugLog(`Supabase result: ${error ? "ERROR" : "SUCCESS"}`)
-
-        if (error) {
-          addDebugLog(`Database error: ${error.message}`)
-          Alert.alert("Database Error", `Failed to ${action} item: ${error.message}`)
-          return
-        }
-
-        if (!data || data.length === 0) {
-          addDebugLog("No rows updated - permission issue?")
-          Alert.alert("Error", "Item not found or you don't have permission to modify it")
-          return
-        }
-
-        addDebugLog(`Item ${action} successful!`)
-        Alert.alert("Success", `Item ${action} successful!`)
-
-        // Update local state
-        setItems((prevItems) =>
-          prevItems.map((item) =>
-            item.id === itemId
-              ? { ...item, is_available: newAvailability, updated_at: new Date().toISOString() }
-              : item,
-          ),
-        )
-
-        // Reload items
-        loadMyItems()
-      } catch (error) {
-        addDebugLog(`Unexpected error: ${error.message}`)
-        Alert.alert("Error", `Unexpected error: ${error.message}`)
+      if (tradeRequestError) {
+        addDebugLog(`Trade request cleanup error: ${tradeRequestError.message}`)
+        // Continue anyway - this is not critical
+      } else {
+        addDebugLog("Trade requests cleaned up successfully")
       }
+
+      const { data, error } = await supabase
+        .from("items")
+        .update({
+          is_available: newAvailability,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", itemId)
+        .eq("user_id", session.user.id)
+        .select()
+
+      addDebugLog(`Supabase result: ${error ? "ERROR" : "SUCCESS"}`)
+
+      if (error) {
+        addDebugLog(`Database error: ${error.message}`)
+        Alert.alert("Database Error", `Failed to ${action} item: ${error.message}`)
+        return
+      }
+
+      if (!data || data.length === 0) {
+        addDebugLog("No rows updated - permission issue?")
+        Alert.alert("Error", "Item not found or you don't have permission to modify it")
+        return
+      }
+
+      addDebugLog(`Item ${action} successful! Updated ${data.length} rows`)
+      Alert.alert("Success", `Item ${action} successful!`)
+
+      // Update local state
+      setItems((prevItems) =>
+        prevItems.map((item) =>
+          item.id === itemId ? { ...item, is_available: newAvailability, updated_at: new Date().toISOString() } : item,
+        ),
+      )
+
+      addDebugLog("Local state updated")
+
+      // Reload items
+      loadMyItems()
     } catch (error) {
       addDebugLog(`Function error: ${error.message}`)
       Alert.alert("Error", `Function error: ${error.message}`)
@@ -115,9 +123,21 @@ export default function MyItems({ session }: MyItemsProps) {
   async function deleteItem(itemId: string, imageUrls: string[]) {
     addDebugLog(`deleteItem called for item ${itemId.substring(0, 8)}`)
 
-    // For web testing, let's skip the confirmation dialog initially
     try {
       addDebugLog("Proceeding with deletion...")
+
+      // Delete associated trade requests first
+      const { error: tradeRequestError } = await supabase
+        .from("trade_requests")
+        .delete()
+        .or(`requester_item_id.eq.${itemId},target_item_id.eq.${itemId}`)
+
+      if (tradeRequestError) {
+        addDebugLog(`Trade request cleanup error: ${tradeRequestError.message}`)
+        // Continue anyway - this is not critical
+      } else {
+        addDebugLog("Trade requests cleaned up successfully")
+      }
 
       const { data, error } = await supabase
         .from("items")
@@ -140,11 +160,36 @@ export default function MyItems({ session }: MyItemsProps) {
         return
       }
 
-      addDebugLog("Item deleted successfully!")
+      addDebugLog(`Item deleted successfully! Deleted ${data.length} rows`)
       Alert.alert("Success", "Item deleted successfully!")
 
       // Update local state
       setItems((prevItems) => prevItems.filter((item) => item.id !== itemId))
+
+      addDebugLog("Local state updated")
+
+      // Try to delete images from storage
+      if (imageUrls && imageUrls.length > 0) {
+        try {
+          const filePaths = imageUrls
+            .map((url) => {
+              const urlParts = url.split("/item-images/")
+              return urlParts.length > 1 ? urlParts[1] : null
+            })
+            .filter(Boolean) as string[]
+
+          if (filePaths.length > 0) {
+            const { error: storageError } = await supabase.storage.from("item-images").remove(filePaths)
+            if (storageError) {
+              addDebugLog(`Image cleanup error: ${storageError.message}`)
+            } else {
+              addDebugLog("Images deleted successfully")
+            }
+          }
+        } catch (imageError) {
+          addDebugLog(`Error processing images: ${imageError.message}`)
+        }
+      }
 
       // Reload items
       loadMyItems()
@@ -175,8 +220,12 @@ export default function MyItems({ session }: MyItemsProps) {
         <Text style={styles.subtitle}>Manage your posted items</Text>
 
         <View style={styles.tabs}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === "available" && styles.activeTab]}
+          <Pressable
+            style={({ pressed }) => [
+              styles.tab,
+              activeTab === "available" && styles.activeTab,
+              pressed && styles.tabPressed,
+            ]}
             onPress={() => {
               addDebugLog("Available tab pressed")
               setActiveTab("available")
@@ -185,9 +234,13 @@ export default function MyItems({ session }: MyItemsProps) {
             <Text style={[styles.tabText, activeTab === "available" && styles.activeTabText]}>
               Available ({items.filter((item) => item.is_available).length})
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === "unavailable" && styles.activeTab]}
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.tab,
+              activeTab === "unavailable" && styles.activeTab,
+              pressed && styles.tabPressed,
+            ]}
             onPress={() => {
               addDebugLog("Unavailable tab pressed")
               setActiveTab("unavailable")
@@ -196,7 +249,7 @@ export default function MyItems({ session }: MyItemsProps) {
             <Text style={[styles.tabText, activeTab === "unavailable" && styles.activeTabText]}>
               Taken Down ({items.filter((item) => !item.is_available).length})
             </Text>
-          </TouchableOpacity>
+          </Pressable>
         </View>
       </View>
 
@@ -361,6 +414,9 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
+  tabPressed: {
+    opacity: 0.7,
+  },
   tabText: {
     fontSize: 14,
     fontWeight: "600",
@@ -517,6 +573,9 @@ const styles = StyleSheet.create({
   },
   repostButtonText: {
     color: "#065f46",
+  },
+  deleteButtonText: {
+    color: "#732d2d",
   },
   emptyState: {
     flex: 1,
