@@ -1,11 +1,10 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Image } from "react-native"
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Image, Pressable } from "react-native"
 import { supabase } from "../lib/supabase"
 import type { Session } from "@supabase/supabase-js"
 import type { Item } from "../types/database"
-import { Button } from "@rneui/themed"
 import { Feather } from "@expo/vector-icons"
 
 interface MyItemsProps {
@@ -16,6 +15,13 @@ export default function MyItems({ session }: MyItemsProps) {
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<"available" | "unavailable">("available")
+  const [debugInfo, setDebugInfo] = useState<string[]>([])
+
+  // Add debug logging function
+  const addDebugLog = (message: string) => {
+    console.log(message)
+    setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
+  }
 
   useEffect(() => {
     loadMyItems()
@@ -24,6 +30,7 @@ export default function MyItems({ session }: MyItemsProps) {
   async function loadMyItems() {
     try {
       setLoading(true)
+      addDebugLog("Loading items...")
 
       const { data, error } = await supabase
         .from("items")
@@ -34,8 +41,10 @@ export default function MyItems({ session }: MyItemsProps) {
       if (error) throw error
 
       setItems(data || [])
+      addDebugLog(`Loaded ${data?.length || 0} items`)
     } catch (error) {
       console.error("Error loading items:", error)
+      addDebugLog(`Error loading items: ${error.message}`)
       Alert.alert("Error", "Failed to load your items")
     } finally {
       setLoading(false)
@@ -43,79 +52,106 @@ export default function MyItems({ session }: MyItemsProps) {
   }
 
   async function toggleItemAvailability(itemId: string, currentAvailability: boolean) {
+    addDebugLog(`toggleItemAvailability called for item ${itemId.substring(0, 8)}`)
+
     try {
       const action = currentAvailability ? "take down" : "repost"
+      const newAvailability = !currentAvailability
 
-      Alert.alert(
-        `${currentAvailability ? "Take Down" : "Repost"} Item`,
-        `Are you sure you want to ${action} this item?`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: currentAvailability ? "Take Down" : "Repost",
-            style: currentAvailability ? "destructive" : "default",
-            onPress: async () => {
-              const { error } = await supabase
-                .from("items")
-                .update({
-                  is_available: !currentAvailability,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", itemId)
+      addDebugLog(`Action: ${action}, New availability: ${newAvailability}`)
 
-              if (error) {
-                Alert.alert("Error", `Failed to ${action} item`)
-                return
-              }
+      // For web testing, let's skip the confirmation dialog initially
+      try {
+        addDebugLog("Proceeding with Supabase update...")
 
-              Alert.alert("Success", `Item ${currentAvailability ? "taken down" : "reposted"} successfully!`)
-              loadMyItems()
-            },
-          },
-        ],
-      )
+        const { data, error } = await supabase
+          .from("items")
+          .update({
+            is_available: newAvailability,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", itemId)
+          .eq("user_id", session.user.id)
+          .select()
+
+        addDebugLog(`Supabase result: ${error ? "ERROR" : "SUCCESS"}`)
+
+        if (error) {
+          addDebugLog(`Database error: ${error.message}`)
+          Alert.alert("Database Error", `Failed to ${action} item: ${error.message}`)
+          return
+        }
+
+        if (!data || data.length === 0) {
+          addDebugLog("No rows updated - permission issue?")
+          Alert.alert("Error", "Item not found or you don't have permission to modify it")
+          return
+        }
+
+        addDebugLog(`Item ${action} successful!`)
+        Alert.alert("Success", `Item ${action} successful!`)
+
+        // Update local state
+        setItems((prevItems) =>
+          prevItems.map((item) =>
+            item.id === itemId
+              ? { ...item, is_available: newAvailability, updated_at: new Date().toISOString() }
+              : item,
+          ),
+        )
+
+        // Reload items
+        loadMyItems()
+      } catch (error) {
+        addDebugLog(`Unexpected error: ${error.message}`)
+        Alert.alert("Error", `Unexpected error: ${error.message}`)
+      }
     } catch (error) {
-      console.error("Error updating item:", error)
-      Alert.alert("Error", "Failed to update item")
+      addDebugLog(`Function error: ${error.message}`)
+      Alert.alert("Error", `Function error: ${error.message}`)
     }
   }
 
   async function deleteItem(itemId: string, imageUrls: string[]) {
-    Alert.alert("Delete Item", "Are you sure you want to permanently delete this item? This action cannot be undone.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            // Delete images from storage first
-            if (imageUrls && imageUrls.length > 0) {
-              const filePaths = imageUrls
-                .map((url) => {
-                  const urlParts = url.split("/item-images/")
-                  return urlParts.length > 1 ? urlParts[1] : null
-                })
-                .filter(Boolean)
+    addDebugLog(`deleteItem called for item ${itemId.substring(0, 8)}`)
 
-              if (filePaths.length > 0) {
-                await supabase.storage.from("item-images").remove(filePaths)
-              }
-            }
+    // For web testing, let's skip the confirmation dialog initially
+    try {
+      addDebugLog("Proceeding with deletion...")
 
-            // Delete item from database
-            const { error } = await supabase.from("items").delete().eq("id", itemId)
+      const { data, error } = await supabase
+        .from("items")
+        .delete()
+        .eq("id", itemId)
+        .eq("user_id", session.user.id)
+        .select()
 
-            if (error) throw error
+      addDebugLog(`Delete result: ${error ? "ERROR" : "SUCCESS"}`)
 
-            Alert.alert("Success", "Item deleted successfully!")
-            loadMyItems()
-          } catch (error) {
-            console.error("Error deleting item:", error)
-            Alert.alert("Error", "Failed to delete item")
-          }
-        },
-      },
-    ])
+      if (error) {
+        addDebugLog(`Delete error: ${error.message}`)
+        Alert.alert("Database Error", `Failed to delete item: ${error.message}`)
+        return
+      }
+
+      if (!data || data.length === 0) {
+        addDebugLog("No rows deleted - permission issue?")
+        Alert.alert("Error", "Item not found or you don't have permission to delete it")
+        return
+      }
+
+      addDebugLog("Item deleted successfully!")
+      Alert.alert("Success", "Item deleted successfully!")
+
+      // Update local state
+      setItems((prevItems) => prevItems.filter((item) => item.id !== itemId))
+
+      // Reload items
+      loadMyItems()
+    } catch (error) {
+      addDebugLog(`Delete error: ${error.message}`)
+      Alert.alert("Error", `Unexpected error: ${error.message}`)
+    }
   }
 
   const filteredItems = items.filter((item) => (activeTab === "available" ? item.is_available : !item.is_available))
@@ -141,7 +177,10 @@ export default function MyItems({ session }: MyItemsProps) {
         <View style={styles.tabs}>
           <TouchableOpacity
             style={[styles.tab, activeTab === "available" && styles.activeTab]}
-            onPress={() => setActiveTab("available")}
+            onPress={() => {
+              addDebugLog("Available tab pressed")
+              setActiveTab("available")
+            }}
           >
             <Text style={[styles.tabText, activeTab === "available" && styles.activeTabText]}>
               Available ({items.filter((item) => item.is_available).length})
@@ -149,13 +188,26 @@ export default function MyItems({ session }: MyItemsProps) {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tab, activeTab === "unavailable" && styles.activeTab]}
-            onPress={() => setActiveTab("unavailable")}
+            onPress={() => {
+              addDebugLog("Unavailable tab pressed")
+              setActiveTab("unavailable")
+            }}
           >
             <Text style={[styles.tabText, activeTab === "unavailable" && styles.activeTabText]}>
               Taken Down ({items.filter((item) => !item.is_available).length})
             </Text>
           </TouchableOpacity>
         </View>
+      </View>
+
+      {/* Debug info panel */}
+      <View style={styles.debugPanel}>
+        <Text style={styles.debugTitle}>Debug Log:</Text>
+        {debugInfo.map((log, index) => (
+          <Text key={index} style={styles.debugText}>
+            {log}
+          </Text>
+        ))}
       </View>
 
       <ScrollView style={styles.content}>
@@ -203,22 +255,36 @@ export default function MyItems({ session }: MyItemsProps) {
               </Text>
 
               <View style={styles.itemActions}>
-                <Button
-                  title={item.is_available ? "Take Down" : "Repost"}
-                  onPress={() => toggleItemAvailability(item.id, item.is_available)}
-                  buttonStyle={[styles.actionButton, item.is_available ? styles.takeDownButton : styles.repostButton]}
-                  titleStyle={[
-                    styles.actionButtonText,
-                    item.is_available ? styles.takeDownButtonText : styles.repostButtonText,
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionButton,
+                    item.is_available ? styles.takeDownButton : styles.repostButton,
+                    pressed && styles.buttonPressed,
                   ]}
-                />
+                  onPress={() => {
+                    addDebugLog(`${item.is_available ? "Take down" : "Repost"} button pressed for ${item.title}`)
+                    toggleItemAvailability(item.id, item.is_available)
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.actionButtonText,
+                      item.is_available ? styles.takeDownButtonText : styles.repostButtonText,
+                    ]}
+                  >
+                    {item.is_available ? "Take Down" : "Repost"}
+                  </Text>
+                </Pressable>
 
-                <Button
-                  title="Delete"
-                  onPress={() => deleteItem(item.id, item.image_urls)}
-                  buttonStyle={[styles.actionButton, styles.deleteButton]}
-                  titleStyle={styles.deleteButtonText}
-                />
+                <Pressable
+                  style={({ pressed }) => [styles.actionButton, styles.deleteButton, pressed && styles.buttonPressed]}
+                  onPress={() => {
+                    addDebugLog(`Delete button pressed for ${item.title}`)
+                    deleteItem(item.id, item.image_urls)
+                  }}
+                >
+                  <Text style={styles.deleteButtonText}>Delete</Text>
+                </Pressable>
               </View>
             </View>
           ))
@@ -303,6 +369,24 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: "#3b82f6",
   },
+  debugPanel: {
+    backgroundColor: "#f1f5f9",
+    padding: 10,
+    margin: 10,
+    borderRadius: 8,
+    maxHeight: 120,
+  },
+  debugTitle: {
+    fontSize: 12,
+    fontWeight: "bold",
+    color: "#1e293b",
+    marginBottom: 4,
+  },
+  debugText: {
+    fontSize: 10,
+    color: "#64748b",
+    marginBottom: 2,
+  },
   content: {
     flex: 1,
     padding: 20,
@@ -334,28 +418,24 @@ const styles = StyleSheet.create({
   placeholderImage: {
     width: 80,
     height: 80,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 12,
+    backgroundColor: "#e2e8f0",
     justifyContent: "center",
     alignItems: "center",
   },
   imageCount: {
     position: "absolute",
-    bottom: 4,
-    right: 4,
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    bottom: 0,
+    right: 0,
+    backgroundColor: "#3b82f6",
     borderRadius: 8,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    padding: 2,
   },
   imageCountText: {
     color: "white",
     fontSize: 10,
-    fontWeight: "600",
   },
   itemInfo: {
     flex: 1,
-    justifyContent: "space-between",
   },
   itemTitle: {
     fontSize: 18,
@@ -365,18 +445,17 @@ const styles = StyleSheet.create({
   },
   itemValue: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#059669",
-    marginBottom: 2,
+    color: "#64748b",
+    marginBottom: 4,
   },
   itemCondition: {
     fontSize: 14,
-    color: "#64748b",
-    marginBottom: 2,
+    color: "#94a3b8",
+    marginBottom: 4,
   },
   itemDate: {
     fontSize: 12,
-    color: "#94a3b8",
+    color: "#64748b",
   },
   statusIndicator: {
     alignItems: "flex-end",
@@ -384,81 +463,75 @@ const styles = StyleSheet.create({
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 6,
+    borderRadius: 8,
   },
   availableBadge: {
-    backgroundColor: "#d1fae5",
+    backgroundColor: "#6ee7b7",
   },
   unavailableBadge: {
-    backgroundColor: "#fee2e2",
+    backgroundColor: "#f87171",
   },
   statusText: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "bold",
   },
   availableText: {
     color: "#065f46",
   },
   unavailableText: {
-    color: "#991b1b",
+    color: "#732d2d",
   },
   itemDescription: {
     fontSize: 14,
     color: "#64748b",
-    lineHeight: 20,
     marginBottom: 16,
   },
   itemActions: {
     flexDirection: "row",
-    gap: 12,
+    justifyContent: "space-between",
   },
   actionButton: {
-    flex: 1,
-    borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
   },
   takeDownButton: {
-    backgroundColor: "transparent",
-    borderWidth: 1,
-    borderColor: "#f59e0b",
+    backgroundColor: "#f87171",
   },
   repostButton: {
-    backgroundColor: "#22c55e",
+    backgroundColor: "#6ee7b7",
   },
   deleteButton: {
-    backgroundColor: "transparent",
-    borderWidth: 1,
-    borderColor: "#ef4444",
+    backgroundColor: "#f87171",
+  },
+  buttonPressed: {
+    opacity: 0.7,
   },
   actionButtonText: {
     fontSize: 14,
-    fontWeight: "600",
-  },
-  takeDownButtonText: {
-    color: "#f59e0b",
-  },
-  repostButtonText: {
+    fontWeight: "bold",
     color: "white",
   },
-  deleteButtonText: {
-    color: "#ef4444",
+  takeDownButtonText: {
+    color: "#732d2d",
+  },
+  repostButtonText: {
+    color: "#065f46",
   },
   emptyState: {
-    alignItems: "center",
+    flex: 1,
     justifyContent: "center",
-    paddingVertical: 60,
+    alignItems: "center",
   },
   emptyTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "bold",
-    color: "#1e293b",
-    marginTop: 16,
+    color: "#64748b",
     marginBottom: 8,
   },
   emptySubtitle: {
-    fontSize: 16,
-    color: "#64748b",
+    fontSize: 14,
+    color: "#94a3b8",
     textAlign: "center",
-    paddingHorizontal: 20,
   },
 })
