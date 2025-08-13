@@ -30,6 +30,8 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
   const [showFilters, setShowFilters] = useState(false)
   const [maxDistance, setMaxDistance] = useState(50)
   const [locationEnabled, setLocationEnabled] = useState(false)
+  const [swipedItemIds, setSwipedItemIds] = useState<Set<string>>(new Set())
+  const [debugInfo, setDebugInfo] = useState<any>({})
 
   const { location, loading: locationLoading, requestLocation, updateUserLocation } = useLocation()
 
@@ -71,71 +73,121 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
     try {
       setLoading(true)
       console.log("=== LOADING POTENTIAL MATCHES ===")
+      console.log("Current user ID:", session.user.id)
 
-      // Step 1: Get items from other users (simple query)
-      const { data: rawItems, error: itemsError } = await supabase
+      const debug: any = {
+        currentUserId: session.user.id,
+        steps: [],
+      }
+
+      // Step 1: Check total items in database
+      const { data: allItems, error: allItemsError } = await supabase.from("items").select("*")
+
+      debug.steps.push({
+        step: "1. Total items in database",
+        count: allItems?.length || 0,
+        error: allItemsError,
+      })
+
+      // Step 2: Check available items
+      const { data: availableItems, error: availableError } = await supabase
+        .from("items")
+        .select("*")
+        .eq("is_available", true)
+
+      debug.steps.push({
+        step: "2. Available items",
+        count: availableItems?.length || 0,
+        error: availableError,
+      })
+
+      // Step 3: Check items from other users
+      const { data: otherUsersItems, error: otherUsersError } = await supabase
         .from("items")
         .select("*")
         .neq("user_id", session.user.id)
         .eq("is_available", true)
-        .limit(20)
 
-      console.log("Raw items query result:", { count: rawItems?.length || 0, error: itemsError })
-
-      if (itemsError) throw itemsError
-
-      if (!rawItems || rawItems.length === 0) {
-        console.log("No items found from other users")
-        setItems([])
-        return
-      }
-
-      // Step 2: Get unique user IDs from the items
-      const userIds = [...new Set(rawItems.map((item) => item.user_id))]
-      console.log("Unique user IDs:", userIds.length)
-
-      // Step 3: Fetch profiles for these users
-      const { data: profiles, error: profilesError } = await supabase.from("profiles").select("*").in("id", userIds)
-
-      console.log("Profiles query result:", { count: profiles?.length || 0, error: profilesError })
-
-      if (profilesError) {
-        console.warn("Error fetching profiles:", profilesError)
-      }
-
-      // Step 4: Combine items with their owner profiles
-      const itemsWithProfiles: ItemWithProfile[] = rawItems.map((item) => {
-        const ownerProfile = profiles?.find((profile) => profile.id === item.user_id)
-        return {
-          ...item,
-          owner_profile: ownerProfile || {
-            id: item.user_id,
-            full_name: "Unknown User",
-            username: null,
-            phone: null,
-            avatar_url: null,
-            latitude: null,
-            longitude: null,
-            location_name: null,
-            location_updated_at: null,
-            created_at: "",
-            updated_at: "",
-          },
-        }
+      debug.steps.push({
+        step: "3. Items from other users",
+        count: otherUsersItems?.length || 0,
+        error: otherUsersError,
+        sample: otherUsersItems?.slice(0, 2).map((item) => ({
+          id: item.id,
+          title: item.title,
+          user_id: item.user_id,
+        })),
       })
 
-      console.log("Final items with profiles:", itemsWithProfiles.length)
-      console.log(
-        "Sample item:",
-        itemsWithProfiles[0]
-          ? {
-              title: itemsWithProfiles[0].title,
-              owner: itemsWithProfiles[0].owner_profile?.full_name,
-            }
-          : "No items",
-      )
+      // Step 4: Check existing trade requests
+      const { data: existingRequests, error: requestsError } = await supabase
+        .from("trade_requests")
+        .select("target_item_id")
+        .eq("requester_id", session.user.id)
 
-      setItems(itemsWithProfiles)
+      debug.steps.push({
+        step: "4. Existing trade requests",
+        count: existingRequests?.length || 0,
+        error: requestsError,
+        requestedItemIds: existingRequests?.map((req) => req.target_item_id),
+      })
+
+      // Step 5: Apply filtering
+      const requestedItemIds = new Set(existingRequests?.map((req) => req.target_item_id) || [])
+      const filteredItems =
+        otherUsersItems?.filter((item) => {
+          const isSwipedItem = swipedItemIds.has(item.id)
+          const isRequestedItem = requestedItemIds.has(item.id)
+          return !isSwipedItem && !isRequestedItem
+        }) || []
+
+      debug.steps.push({
+        step: "5. After filtering",
+        count: filteredItems.length,
+        swipedItemsCount: swipedItemIds.size,
+        requestedItemsCount: requestedItemIds.size,
+      })
+
+      // Step 6: Get profiles
+      if (filteredItems.length > 0) {
+        const userIds = [...new Set(filteredItems.map((item) => item.user_id))]
+        const { data: profiles, error: profilesError } = await supabase.from("profiles").select("*").in("id", userIds)
+
+        debug.steps.push({
+          step: "6. Profiles loaded",
+          userIds: userIds,
+          profilesCount: profiles?.length || 0,
+          error: profilesError,
+        })
+
+        // Combine items with profiles
+        const itemsWithProfiles: ItemWithProfile[] = filteredItems.map((item) => {
+          const ownerProfile = profiles?.find((profile) => profile.id === item.user_id)
+          return {
+            ...item,
+            owner_profile: ownerProfile || {
+              id: item.user_id,
+              full_name: "Unknown User",
+              username: null,
+              phone: null,
+              avatar_url: null,
+              latitude: null,
+              longitude: null,
+              location_name: null,
+              location_updated_at: null,
+              created_at: "",
+              updated_at: "",
+            },
+          }
+        })
+
+        setItems(itemsWithProfiles)
+      } else {
+        setItems([])
+      }
+
+      setDebugInfo(debug)
+      console.log("=== DEBUG INFO ===", debug)
     } catch (error) {
       console.error("Error loading matches:", error)
       Alert.alert("Error", "Failed to load potential matches")
@@ -152,6 +204,9 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
     if (currentIndex >= items.length) return
 
     const currentItem = items[currentIndex]
+
+    // Add item to swiped items set immediately
+    setSwipedItemIds((prev) => new Set(prev).add(currentItem.id))
 
     if (direction === "right") {
       sendTradeRequest(currentItem)
@@ -187,6 +242,11 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
 
       const userItem = userItems[0]
 
+      console.log("=== SENDING TRADE REQUEST ===")
+      console.log("User item:", userItem.title)
+      console.log("Target item:", targetItem.title)
+      console.log("Target user:", targetItem.user_id)
+
       const tradeRequest = {
         requester_id: session.user.id,
         requester_item_id: userItem.id,
@@ -195,14 +255,58 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
         status: "pending" as const,
       }
 
-      const { error } = await supabase.from("trade_requests").insert([tradeRequest])
+      const { data, error } = await supabase.from("trade_requests").insert([tradeRequest]).select()
 
-      if (error) throw error
+      if (error) {
+        console.error("Trade request error:", error)
 
+        // Check if it's a duplicate request
+        if (error.code === "23505") {
+          Alert.alert("Already Requested", "You've already sent a trade request for this item")
+        } else {
+          throw error
+        }
+        return
+      }
+
+      console.log("Trade request sent successfully:", data)
       Alert.alert("Trade Request Sent!", `You've requested to trade your ${userItem.title} for ${targetItem.title}`)
     } catch (error) {
       console.error("Error sending trade request:", error)
       Alert.alert("Error", "Failed to send trade request")
+    }
+  }
+
+  async function resetTradeRequests() {
+    try {
+      Alert.alert(
+        "Reset Trade Requests",
+        "This will delete all your outgoing trade requests so you can see items again. Are you sure?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Reset",
+            style: "destructive",
+            onPress: async () => {
+              const { error } = await supabase.from("trade_requests").delete().eq("requester_id", session.user.id)
+
+              if (error) {
+                console.error("Error resetting trade requests:", error)
+                Alert.alert("Error", "Failed to reset trade requests")
+                return
+              }
+
+              Alert.alert("Success", "Trade requests reset! Refreshing items...")
+              setCurrentIndex(0)
+              setSwipedItemIds(new Set())
+              loadPotentialMatches()
+            },
+          },
+        ],
+      )
+    } catch (error) {
+      console.error("Error resetting trade requests:", error)
+      Alert.alert("Error", "Failed to reset trade requests")
     }
   }
 
@@ -237,17 +341,58 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
           title="Refresh"
           onPress={() => {
             setCurrentIndex(0)
+            setSwipedItemIds(new Set()) // Clear swiped items when refreshing
             loadPotentialMatches()
           }}
           buttonStyle={styles.refreshButton}
         />
 
-        {/* Debug info */}
+        {/* Enhanced Debug info */}
         <View style={styles.debugInfo}>
           <Text style={styles.debugText}>Debug Info:</Text>
           <Text style={styles.debugText}>Current User: {session.user.id.substring(0, 8)}...</Text>
           <Text style={styles.debugText}>Items Found: {items.length}</Text>
           <Text style={styles.debugText}>User Items: {userItems.length}</Text>
+          <Text style={styles.debugText}>Swiped Items: {swipedItemIds.size}</Text>
+          <Text style={styles.debugText}>Current Index: {currentIndex}</Text>
+
+          {debugInfo.steps && (
+            <View style={styles.debugSteps}>
+              <Text style={styles.debugText}>Detailed Steps:</Text>
+              {debugInfo.steps.map((step: any, index: number) => (
+                <View key={index} style={styles.debugStep}>
+                  <Text style={styles.debugStepText}>
+                    {step.step}: {step.count || 0}
+                  </Text>
+                  {step.error && <Text style={styles.debugErrorText}>Error: {step.error.message}</Text>}
+                  {step.sample && <Text style={styles.debugText}>Sample: {JSON.stringify(step.sample, null, 2)}</Text>}
+                </View>
+              ))}
+            </View>
+          )}
+
+          <Button
+            title="Reset Swiped Items"
+            onPress={() => {
+              setSwipedItemIds(new Set())
+              setCurrentIndex(0)
+              loadPotentialMatches()
+            }}
+            buttonStyle={[styles.refreshButton, { marginTop: 10 }]}
+          />
+
+          <Button
+            title="Show Debug Details"
+            onPress={() => {
+              Alert.alert("Debug Info", JSON.stringify(debugInfo, null, 2))
+            }}
+            buttonStyle={[styles.refreshButton, { marginTop: 10, backgroundColor: "#f59e0b" }]}
+          />
+          <Button
+            title="Reset Trade Requests"
+            onPress={resetTradeRequests}
+            buttonStyle={[styles.refreshButton, { marginTop: 10, backgroundColor: "#ef4444" }]}
+          />
         </View>
       </View>
     )
@@ -412,18 +557,39 @@ const styles = StyleSheet.create({
     backgroundColor: "#3b82f6",
     borderRadius: 12,
     paddingHorizontal: 32,
-    marginBottom: 20,
+    marginBottom: 10,
   },
   debugInfo: {
     backgroundColor: "#f1f5f9",
     padding: 16,
     borderRadius: 8,
     alignItems: "center",
+    maxHeight: 400,
   },
   debugText: {
     fontSize: 12,
     color: "#64748b",
     marginBottom: 4,
+  },
+  debugSteps: {
+    marginTop: 10,
+    width: "100%",
+  },
+  debugStep: {
+    marginBottom: 8,
+    padding: 8,
+    backgroundColor: "#e2e8f0",
+    borderRadius: 4,
+  },
+  debugStepText: {
+    fontSize: 11,
+    color: "#1e293b",
+    fontWeight: "600",
+  },
+  debugErrorText: {
+    fontSize: 10,
+    color: "#ef4444",
+    marginTop: 2,
   },
   header: {
     flexDirection: "row",

@@ -63,12 +63,18 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
     const friendshipsSubscription = supabase
       .channel("friendships")
-      .on("postgres_changes", { event: "*", schema: "public", table: "friendships" }, () => loadFriendRequests())
+      .on("postgres_changes", { event: "*", schema: "public", table: "friendships" }, () => {
+        loadFriendRequests()
+        loadOutgoingFriendRequests()
+      })
       .subscribe()
 
     const tradeRequestsSubscription = supabase
       .channel("trade_requests")
-      .on("postgres_changes", { event: "*", schema: "public", table: "trade_requests" }, () => loadTradeRequests())
+      .on("postgres_changes", { event: "*", schema: "public", table: "trade_requests" }, () => {
+        loadTradeRequests()
+        loadOutgoingTradeRequests()
+      })
       .subscribe()
 
     return () => {
@@ -130,6 +136,10 @@ export default function MessagesList({ session, onConversationSelect }: Messages
               username: null,
               phone: null,
               avatar_url: null,
+              latitude: null,
+              longitude: null,
+              location_name: null,
+              location_updated_at: null,
               created_at: "",
               updated_at: "",
             },
@@ -170,19 +180,29 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
   async function loadTradeRequests() {
     try {
+      console.log("=== LOADING INCOMING TRADE REQUESTS ===")
+      console.log("Current user ID:", session.user.id)
+
+      // Load only PENDING incoming trade requests for the count
       const { data, error } = await supabase
         .from("trade_requests")
         .select(`
-          *,
-          requester_item:items!trade_requests_requester_item_id_fkey(*),
-          target_item:items!trade_requests_target_item_id_fkey(*),
-          requester_profile:profiles!trade_requests_requester_id_fkey(*)
-        `)
+        *,
+        requester_item:items!trade_requests_requester_item_id_fkey(*),
+        target_item:items!trade_requests_target_item_id_fkey(*),
+        requester_profile:profiles!trade_requests_requester_id_fkey(*)
+      `)
         .eq("target_user_id", session.user.id)
-        .eq("status", "pending")
+        .eq("status", "pending") // Only show pending requests
         .order("created_at", { ascending: false })
 
-      if (error) throw error
+      console.log("Pending incoming trade requests result:", { count: data?.length || 0, error })
+
+      if (error) {
+        console.error("Error loading incoming trade requests:", error)
+        setTradeRequests([])
+        return
+      }
 
       setTradeRequests(data || [])
     } catch (error) {
@@ -212,6 +232,10 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
   async function loadOutgoingTradeRequests() {
     try {
+      console.log("=== LOADING OUTGOING TRADE REQUESTS ===")
+      console.log("Current user ID:", session.user.id)
+
+      // Load only PENDING outgoing trade requests for the count
       const { data, error } = await supabase
         .from("trade_requests")
         .select(`
@@ -221,14 +245,79 @@ export default function MessagesList({ session, onConversationSelect }: Messages
         target_profile:profiles!trade_requests_target_user_id_fkey(*)
       `)
         .eq("requester_id", session.user.id)
-        .eq("status", "pending")
+        .eq("status", "pending") // Only show pending requests
         .order("created_at", { ascending: false })
 
-      if (error) throw error
+      console.log("Pending outgoing trade requests result:", { count: data?.length || 0, error })
+
+      if (error) {
+        console.error("Error loading outgoing trade requests:", error)
+        setOutgoingTradeRequests([])
+        return
+      }
 
       setOutgoingTradeRequests(data || [])
     } catch (error) {
       console.error("Error loading outgoing trade requests:", error)
+    }
+  }
+
+  async function createOrGetConversation(otherUserId: string): Promise<string | null> {
+    try {
+      // Ensure user1_id is always smaller than user2_id for consistency
+      const user1Id = session.user.id < otherUserId ? session.user.id : otherUserId
+      const user2Id = session.user.id < otherUserId ? otherUserId : session.user.id
+
+      // Check if conversation already exists
+      const { data: existingConversation, error: searchError } = await supabase
+        .from("conversations")
+        .select("*")
+        .eq("user1_id", user1Id)
+        .eq("user2_id", user2Id)
+        .single()
+
+      if (searchError && searchError.code !== "PGRST116") {
+        throw searchError
+      }
+
+      if (existingConversation) {
+        return existingConversation.id
+      }
+
+      // Create new conversation
+      const { data: newConversation, error: createError } = await supabase
+        .from("conversations")
+        .insert([
+          {
+            user1_id: user1Id,
+            user2_id: user2Id,
+          },
+        ])
+        .select()
+        .single()
+
+      if (createError) throw createError
+
+      return newConversation.id
+    } catch (error) {
+      console.error("Error creating/getting conversation:", error)
+      return null
+    }
+  }
+
+  async function sendAutomaticMessage(conversationId: string, message: string) {
+    try {
+      const { error } = await supabase.from("messages").insert([
+        {
+          conversation_id: conversationId,
+          sender_id: session.user.id,
+          content: message,
+        },
+      ])
+
+      if (error) throw error
+    } catch (error) {
+      console.error("Error sending automatic message:", error)
     }
   }
 
@@ -245,6 +334,11 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       if (error) throw error
 
       Alert.alert("Success", status === "accepted" ? "Friend request accepted!" : "Friend request declined")
+
+      // Remove the request from local state immediately for better UX
+      setFriendRequests((prev) => prev.filter((req) => req.id !== requestId))
+
+      // Reload to ensure consistency
       loadFriendRequests()
     } catch (error) {
       console.error("Error responding to friend request:", error)
@@ -254,6 +348,16 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
   async function respondToTradeRequest(requestId: string, status: "accepted" | "declined") {
     try {
+      console.log(`=== RESPONDING TO TRADE REQUEST: ${status.toUpperCase()} ===`)
+
+      // Find the request in our local state to get details
+      const request = tradeRequests.find((req) => req.id === requestId)
+      if (!request) {
+        Alert.alert("Error", "Trade request not found")
+        return
+      }
+
+      // Update the trade request status
       const { error } = await supabase
         .from("trade_requests")
         .update({
@@ -264,8 +368,45 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (error) throw error
 
-      Alert.alert("Success", status === "accepted" ? "Trade request accepted!" : "Trade request declined")
+      // Remove the request from local state immediately for better UX
+      setTradeRequests((prev) => prev.filter((req) => req.id !== requestId))
+
+      if (status === "accepted") {
+        console.log("Trade request accepted, creating conversation and sending message...")
+
+        // Create or get conversation with the requester
+        const conversationId = await createOrGetConversation(request.requester_id)
+
+        if (conversationId) {
+          // Send automatic message
+          const message = `Great news! I've accepted your trade request. You offered your "${request.requester_item.title}" for my "${request.target_item.title}". Let's discuss the details!`
+
+          await sendAutomaticMessage(conversationId, message)
+
+          // Reload conversations to show the new message
+          loadConversations()
+
+          Alert.alert(
+            "Trade Accepted!",
+            "The trade request has been accepted and a message has been sent to coordinate the trade.",
+            [
+              {
+                text: "View Messages",
+                onPress: () => setActiveTab("messages"),
+              },
+              { text: "OK" },
+            ],
+          )
+        } else {
+          Alert.alert("Trade Accepted!", "The trade request has been accepted!")
+        }
+      } else {
+        Alert.alert("Trade Declined", "The trade request has been declined.")
+      }
+
+      // Reload to ensure consistency
       loadTradeRequests()
+      loadOutgoingTradeRequests()
     } catch (error) {
       console.error("Error responding to trade request:", error)
       Alert.alert("Error", "Failed to respond to trade request")
@@ -284,6 +425,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
     }
   }
 
+  // Only count pending requests for the badge
   const totalRequests =
     friendRequests.length + tradeRequests.length + outgoingFriendRequests.length + outgoingTradeRequests.length
 
@@ -395,7 +537,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
             {requestsSubTab === "incoming" ? (
               <View>
-                {/* Existing incoming requests code */}
+                {/* Friend Requests */}
                 {friendRequests.length > 0 && (
                   <View style={styles.requestSection}>
                     <Text style={styles.sectionTitle}>Friend Requests</Text>
@@ -441,6 +583,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                   </View>
                 )}
 
+                {/* Trade Requests */}
                 {tradeRequests.length > 0 && (
                   <View style={styles.requestSection}>
                     <Text style={styles.sectionTitle}>Trade Requests</Text>
@@ -448,12 +591,14 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                       <View key={request.id} style={styles.tradeRequestCard}>
                         <View style={styles.tradeRequestHeader}>
                           <Text style={styles.requestTitle}>Trade Request</Text>
-                          <Text style={styles.requestTime}>{formatTime(request.created_at)}</Text>
+                          <View style={[styles.statusBadge, styles.statuspending]}>
+                            <Text style={styles.statusText}>PENDING</Text>
+                          </View>
                         </View>
 
                         <View style={styles.tradeDetails}>
                           <Text style={styles.tradeText}>
-                            {request.requester_profile.full_name} wants to trade their{" "}
+                            {request.requester_profile?.full_name || "Someone"} wants to trade their{" "}
                             <Text style={styles.itemName}>{request.requester_item.title}</Text> for your{" "}
                             <Text style={styles.itemName}>{request.target_item.title}</Text>
                           </Text>
@@ -473,6 +618,8 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                             titleStyle={styles.acceptButtonText}
                           />
                         </View>
+
+                        <Text style={styles.requestTime}>{formatTime(request.created_at)}</Text>
                       </View>
                     ))}
                   </View>
@@ -480,14 +627,14 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
                 {friendRequests.length === 0 && tradeRequests.length === 0 && (
                   <View style={styles.emptyState}>
-                    <Text style={styles.emptyTitle}>No Incoming Requests</Text>
-                    <Text style={styles.emptySubtitle}>Friend and trade requests you receive will appear here</Text>
+                    <Text style={styles.emptyTitle}>No Pending Requests</Text>
+                    <Text style={styles.emptySubtitle}>New friend and trade requests will appear here</Text>
                   </View>
                 )}
               </View>
             ) : (
               <View>
-                {/* Outgoing requests */}
+                {/* Outgoing Friend Requests */}
                 {outgoingFriendRequests.length > 0 && (
                   <View style={styles.requestSection}>
                     <Text style={styles.sectionTitle}>Friend Requests Sent</Text>
@@ -497,19 +644,19 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                           size={50}
                           rounded
                           source={
-                            request.addressee_profile.avatar_url
+                            request.addressee_profile?.avatar_url
                               ? { uri: request.addressee_profile.avatar_url }
                               : undefined
                           }
-                          icon={!request.addressee_profile.avatar_url ? { name: "user", type: "feather" } : undefined}
+                          icon={!request.addressee_profile?.avatar_url ? { name: "user", type: "feather" } : undefined}
                           containerStyle={styles.avatar}
                         />
 
                         <View style={styles.requestContent}>
                           <Text style={styles.requestTitle}>Friend Request Sent</Text>
                           <Text style={styles.requestUser}>
-                            Waiting for {request.addressee_profile.full_name} (@{request.addressee_profile.username}) to
-                            respond
+                            Waiting for {request.addressee_profile?.full_name} (@{request.addressee_profile?.username})
+                            to respond
                           </Text>
                           <Text style={styles.requestTime}>Sent {formatTime(request.created_at)}</Text>
                         </View>
@@ -518,6 +665,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                   </View>
                 )}
 
+                {/* Outgoing Trade Requests */}
                 {outgoingTradeRequests.length > 0 && (
                   <View style={styles.requestSection}>
                     <Text style={styles.sectionTitle}>Trade Requests Sent</Text>
@@ -525,16 +673,19 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                       <View key={request.id} style={styles.tradeRequestCard}>
                         <View style={styles.tradeRequestHeader}>
                           <Text style={styles.requestTitle}>Trade Request Sent</Text>
-                          <Text style={styles.requestTime}>Sent {formatTime(request.created_at)}</Text>
+                          <View style={[styles.statusBadge, styles.statuspending]}>
+                            <Text style={styles.statusText}>PENDING</Text>
+                          </View>
                         </View>
 
                         <View style={styles.tradeDetails}>
                           <Text style={styles.tradeText}>
                             You offered your <Text style={styles.itemName}>{request.requester_item.title}</Text> for{" "}
-                            {request.target_profile.full_name}'s{" "}
+                            {request.target_profile?.full_name || "someone"}'s{" "}
                             <Text style={styles.itemName}>{request.target_item.title}</Text>
                           </Text>
                         </View>
+                        <Text style={styles.requestTime}>Sent {formatTime(request.created_at)}</Text>
                       </View>
                     ))}
                   </View>
@@ -542,7 +693,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
                 {outgoingFriendRequests.length === 0 && outgoingTradeRequests.length === 0 && (
                   <View style={styles.emptyState}>
-                    <Text style={styles.emptyTitle}>No Outgoing Requests</Text>
+                    <Text style={styles.emptyTitle}>No Pending Outgoing Requests</Text>
                     <Text style={styles.emptySubtitle}>Friend and trade requests you send will appear here</Text>
                   </View>
                 )}
@@ -550,6 +701,62 @@ export default function MessagesList({ session, onConversationSelect }: Messages
             )}
           </View>
         )}
+
+        {/* Debug section */}
+        <View style={styles.debugSection}>
+          <Button
+            title="Debug Requests"
+            onPress={async () => {
+              console.log("=== DEBUG BUTTON PRESSED ===")
+
+              // Force reload all data
+              setLoading(true)
+              await loadTradeRequests()
+              await loadOutgoingTradeRequests()
+              await loadFriendRequests()
+              await loadOutgoingFriendRequests()
+              setLoading(false)
+
+              console.log("After reload:")
+              console.log("Incoming requests:", tradeRequests.length)
+              console.log("Outgoing requests:", outgoingTradeRequests.length)
+              console.log("Friend requests:", friendRequests.length)
+              console.log("Outgoing friend requests:", outgoingFriendRequests.length)
+
+              // Show raw data from Supabase
+              const { data: rawTradeRequests } = await supabase
+                .from("trade_requests")
+                .select("*")
+                .or(`requester_id.eq.${session.user.id},target_user_id.eq.${session.user.id}`)
+
+              console.log("Raw trade requests from DB:", rawTradeRequests)
+
+              Alert.alert(
+                "Debug Info",
+                `Pending Incoming: ${tradeRequests.length}\nPending Outgoing: ${outgoingTradeRequests.length}\nTotal DB Records: ${rawTradeRequests?.length || 0}\n\nNow only showing PENDING requests in counts`,
+                [
+                  {
+                    text: "Force Refresh All",
+                    onPress: async () => {
+                      console.log("Force refreshing all...")
+                      setLoading(true)
+                      await Promise.all([
+                        loadTradeRequests(),
+                        loadOutgoingTradeRequests(),
+                        loadFriendRequests(),
+                        loadOutgoingFriendRequests(),
+                        loadConversations(),
+                      ])
+                      setLoading(false)
+                    },
+                  },
+                  { text: "OK" },
+                ],
+              )
+            }}
+            buttonStyle={{ backgroundColor: "#f59e0b", marginTop: 20 }}
+          />
+        </View>
       </ScrollView>
     </View>
   )
@@ -667,6 +874,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginLeft: 8,
+  },
+  unreadCount: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "600",
   },
   requestSection: {
     marginBottom: 20,
@@ -815,5 +1027,31 @@ const styles = StyleSheet.create({
   },
   activeSubTabText: {
     color: "#3b82f6",
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  statuspending: {
+    backgroundColor: "#fef3c7",
+  },
+  statusaccepted: {
+    backgroundColor: "#d1fae5",
+  },
+  statusdeclined: {
+    backgroundColor: "#fee2e2",
+  },
+  statuscompleted: {
+    backgroundColor: "#dbeafe",
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  debugSection: {
+    alignItems: "center",
+    paddingVertical: 20,
   },
 })
