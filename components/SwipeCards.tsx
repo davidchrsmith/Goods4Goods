@@ -230,6 +230,12 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
       translateY.setValue(0)
       rotate.setValue(0)
       setCurrentIndex(currentIndex + 1)
+
+      // If we just sent a trade request, reload the potential matches
+      // to update the filtering logic
+      if (direction === "right") {
+        loadPotentialMatches()
+      }
     })
   }
 
@@ -247,6 +253,9 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
       console.log("Target item:", targetItem.title)
       console.log("Target user:", targetItem.user_id)
 
+      // Add debugging alert
+      alert(`Sending trade request: ${userItem.title} for ${targetItem.title}`)
+
       const tradeRequest = {
         requester_id: session.user.id,
         requester_item_id: userItem.id,
@@ -259,6 +268,7 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
 
       if (error) {
         console.error("Trade request error:", error)
+        alert(`Trade request error: ${error.message}`)
 
         // Check if it's a duplicate request
         if (error.code === "23505") {
@@ -270,9 +280,14 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
       }
 
       console.log("Trade request sent successfully:", data)
+      alert(`Trade request sent successfully! Request ID: ${data[0]?.id}`)
       Alert.alert("Trade Request Sent!", `You've requested to trade your ${userItem.title} for ${targetItem.title}`)
+
+      // Remove the item from the current items list since we now have a trade request for it
+      setItems((prevItems) => prevItems.filter((item) => item.id !== targetItem.id))
     } catch (error) {
       console.error("Error sending trade request:", error)
+      alert(`Exception sending trade request: ${error.message}`)
       Alert.alert("Error", "Failed to send trade request")
     }
   }

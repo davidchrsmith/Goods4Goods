@@ -160,21 +160,63 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
   async function loadFriendRequests() {
     try {
-      const { data, error } = await supabase
+      // Use simpler query without joins first to test
+      const { data: friendshipData, error: friendshipError } = await supabase
         .from("friendships")
-        .select(`
-          *,
-          requester_profile:profiles!friendships_requester_id_fkey(*)
-        `)
+        .select("*")
         .eq("addressee_id", session.user.id)
         .eq("status", "pending")
         .order("created_at", { ascending: false })
 
-      if (error) throw error
+      if (friendshipError) {
+        console.error("Error loading friendships:", friendshipError)
+        alert(`Error loading friendships: ${friendshipError.message}`)
+        setFriendRequests([])
+        return
+      }
 
-      setFriendRequests(data || [])
+      // Get profiles separately
+      if (friendshipData && friendshipData.length > 0) {
+        const requesterIds = friendshipData.map((req) => req.requester_id)
+        const { data: profiles, error: profilesError } = await supabase
+          .from("profiles")
+          .select("*")
+          .in("id", requesterIds)
+
+        if (profilesError) {
+          console.error("Error loading requester profiles:", profilesError)
+          alert(`Error loading requester profiles: ${profilesError.message}`)
+          setFriendRequests([])
+          return
+        }
+
+        // Combine data
+        const friendRequestsWithProfiles = friendshipData.map((request) => ({
+          ...request,
+          requester_profile: profiles?.find((p) => p.id === request.requester_id) || {
+            id: request.requester_id,
+            full_name: "Unknown User",
+            username: null,
+            phone: null,
+            avatar_url: null,
+            latitude: null,
+            longitude: null,
+            location_name: null,
+            location_updated_at: null,
+            created_at: "",
+            updated_at: "",
+          },
+        }))
+
+        setFriendRequests(friendRequestsWithProfiles)
+        alert(`Loaded ${friendRequestsWithProfiles.length} friend requests`)
+      } else {
+        setFriendRequests([])
+        alert("No friend requests found")
+      }
     } catch (error) {
       console.error("Error loading friend requests:", error)
+      alert(`Exception loading friend requests: ${error.message}`)
     }
   }
 
@@ -183,50 +225,64 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       console.log("=== LOADING INCOMING TRADE REQUESTS ===")
       console.log("Current user ID:", session.user.id)
 
-      // Load only PENDING incoming trade requests for the count
-      const { data, error } = await supabase
+      // Use simpler query without joins first to test
+      const { data: tradeRequestData, error: tradeRequestError } = await supabase
         .from("trade_requests")
-        .select(`
-        *,
-        requester_item:items!trade_requests_requester_item_id_fkey(*),
-        target_item:items!trade_requests_target_item_id_fkey(*),
-        requester_profile:profiles!trade_requests_requester_id_fkey(*)
-      `)
+        .select("*")
         .eq("target_user_id", session.user.id)
-        .eq("status", "pending") // Only show pending requests
+        .eq("status", "pending")
         .order("created_at", { ascending: false })
 
-      console.log("Pending incoming trade requests result:", { count: data?.length || 0, error })
-
-      if (error) {
-        console.error("Error loading incoming trade requests:", error)
+      if (tradeRequestError) {
+        console.error("Error loading trade requests:", tradeRequestError)
+        alert(`Error loading trade requests: ${tradeRequestError.message}`)
         setTradeRequests([])
         return
       }
 
-      setTradeRequests(data || [])
+      if (!tradeRequestData || tradeRequestData.length === 0) {
+        setTradeRequests([])
+        alert("No incoming trade requests found")
+        return
+      }
+
+      // Get related data separately
+      const requesterIds = tradeRequestData.map((req) => req.requester_id)
+      const requesterItemIds = tradeRequestData.map((req) => req.requester_item_id)
+      const targetItemIds = tradeRequestData.map((req) => req.target_item_id)
+
+      // Get profiles
+      const { data: profiles, error: profilesError } = await supabase
+        .from("profiles")
+        .select("*")
+        .in("id", requesterIds)
+
+      // Get items
+      const { data: items, error: itemsError } = await supabase
+        .from("items")
+        .select("*")
+        .in("id", [...requesterItemIds, ...targetItemIds])
+
+      if (profilesError || itemsError) {
+        console.error("Error loading related data:", { profilesError, itemsError })
+        alert(`Error loading related data: ${profilesError?.message || itemsError?.message}`)
+        setTradeRequests([])
+        return
+      }
+
+      // Combine data
+      const tradeRequestsWithDetails = tradeRequestData.map((request) => ({
+        ...request,
+        requester_profile: profiles?.find((p) => p.id === request.requester_id),
+        requester_item: items?.find((i) => i.id === request.requester_item_id)!,
+        target_item: items?.find((i) => i.id === request.target_item_id)!,
+      }))
+
+      setTradeRequests(tradeRequestsWithDetails)
+      alert(`Loaded ${tradeRequestsWithDetails.length} incoming trade requests`)
     } catch (error) {
       console.error("Error loading trade requests:", error)
-    }
-  }
-
-  async function loadOutgoingFriendRequests() {
-    try {
-      const { data, error } = await supabase
-        .from("friendships")
-        .select(`
-        *,
-        addressee_profile:profiles!friendships_addressee_id_fkey(*)
-      `)
-        .eq("requester_id", session.user.id)
-        .eq("status", "pending")
-        .order("created_at", { ascending: false })
-
-      if (error) throw error
-
-      setOutgoingFriendRequests(data || [])
-    } catch (error) {
-      console.error("Error loading outgoing friend requests:", error)
+      alert(`Exception loading trade requests: ${error.message}`)
     }
   }
 
@@ -235,30 +291,126 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       console.log("=== LOADING OUTGOING TRADE REQUESTS ===")
       console.log("Current user ID:", session.user.id)
 
-      // Load only PENDING outgoing trade requests for the count
-      const { data, error } = await supabase
+      // Use simpler query without joins first to test
+      const { data: tradeRequestData, error: tradeRequestError } = await supabase
         .from("trade_requests")
-        .select(`
-        *,
-        requester_item:items!trade_requests_requester_item_id_fkey(*),
-        target_item:items!trade_requests_target_item_id_fkey(*),
-        target_profile:profiles!trade_requests_target_user_id_fkey(*)
-      `)
+        .select("*")
         .eq("requester_id", session.user.id)
-        .eq("status", "pending") // Only show pending requests
+        .eq("status", "pending")
         .order("created_at", { ascending: false })
 
-      console.log("Pending outgoing trade requests result:", { count: data?.length || 0, error })
-
-      if (error) {
-        console.error("Error loading outgoing trade requests:", error)
+      if (tradeRequestError) {
+        console.error("Error loading outgoing trade requests:", tradeRequestError)
+        alert(`Error loading outgoing trade requests: ${tradeRequestError.message}`)
         setOutgoingTradeRequests([])
         return
       }
 
-      setOutgoingTradeRequests(data || [])
+      if (!tradeRequestData || tradeRequestData.length === 0) {
+        setOutgoingTradeRequests([])
+        alert("No outgoing trade requests found")
+        return
+      }
+
+      // Get related data separately
+      const targetUserIds = tradeRequestData.map((req) => req.target_user_id)
+      const requesterItemIds = tradeRequestData.map((req) => req.requester_item_id)
+      const targetItemIds = tradeRequestData.map((req) => req.target_item_id)
+
+      // Get profiles
+      const { data: profiles, error: profilesError } = await supabase
+        .from("profiles")
+        .select("*")
+        .in("id", targetUserIds)
+
+      // Get items
+      const { data: items, error: itemsError } = await supabase
+        .from("items")
+        .select("*")
+        .in("id", [...requesterItemIds, ...targetItemIds])
+
+      if (profilesError || itemsError) {
+        console.error("Error loading related data:", { profilesError, itemsError })
+        alert(`Error loading related data: ${profilesError?.message || itemsError?.message}`)
+        setOutgoingTradeRequests([])
+        return
+      }
+
+      // Combine data
+      const tradeRequestsWithDetails = tradeRequestData.map((request) => ({
+        ...request,
+        target_profile: profiles?.find((p) => p.id === request.target_user_id),
+        requester_item: items?.find((i) => i.id === request.requester_item_id)!,
+        target_item: items?.find((i) => i.id === request.target_item_id)!,
+      }))
+
+      setOutgoingTradeRequests(tradeRequestsWithDetails)
+      alert(`Loaded ${tradeRequestsWithDetails.length} outgoing trade requests`)
     } catch (error) {
       console.error("Error loading outgoing trade requests:", error)
+      alert(`Exception loading outgoing trade requests: ${error.message}`)
+    }
+  }
+
+  async function loadOutgoingFriendRequests() {
+    try {
+      // Use simpler query without joins first to test
+      const { data: friendshipData, error: friendshipError } = await supabase
+        .from("friendships")
+        .select("*")
+        .eq("requester_id", session.user.id)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+
+      if (friendshipError) {
+        console.error("Error loading outgoing friendships:", friendshipError)
+        alert(`Error loading outgoing friendships: ${friendshipError.message}`)
+        setOutgoingFriendRequests([])
+        return
+      }
+
+      // Get profiles separately
+      if (friendshipData && friendshipData.length > 0) {
+        const addresseeIds = friendshipData.map((req) => req.addressee_id)
+        const { data: profiles, error: profilesError } = await supabase
+          .from("profiles")
+          .select("*")
+          .in("id", addresseeIds)
+
+        if (profilesError) {
+          console.error("Error loading addressee profiles:", profilesError)
+          alert(`Error loading addressee profiles: ${profilesError.message}`)
+          setOutgoingFriendRequests([])
+          return
+        }
+
+        // Combine data
+        const friendRequestsWithProfiles = friendshipData.map((request) => ({
+          ...request,
+          addressee_profile: profiles?.find((p) => p.id === request.addressee_id) || {
+            id: request.addressee_id,
+            full_name: "Unknown User",
+            username: null,
+            phone: null,
+            avatar_url: null,
+            latitude: null,
+            longitude: null,
+            location_name: null,
+            location_updated_at: null,
+            created_at: "",
+            updated_at: "",
+          },
+        }))
+
+        setOutgoingFriendRequests(friendRequestsWithProfiles)
+        alert(`Loaded ${friendRequestsWithProfiles.length} outgoing friend requests`)
+      } else {
+        setOutgoingFriendRequests([])
+        alert("No outgoing friend requests found")
+      }
+    } catch (error) {
+      console.error("Error loading outgoing friend requests:", error)
+      alert(`Exception loading outgoing friend requests: ${error.message}`)
     }
   }
 
@@ -705,56 +857,18 @@ export default function MessagesList({ session, onConversationSelect }: Messages
         {/* Debug section */}
         <View style={styles.debugSection}>
           <Button
-            title="Debug Requests"
+            title="Manual Refresh Requests"
             onPress={async () => {
-              console.log("=== DEBUG BUTTON PRESSED ===")
-
-              // Force reload all data
-              setLoading(true)
-              await loadTradeRequests()
-              await loadOutgoingTradeRequests()
-              await loadFriendRequests()
-              await loadOutgoingFriendRequests()
-              setLoading(false)
-
-              console.log("After reload:")
-              console.log("Incoming requests:", tradeRequests.length)
-              console.log("Outgoing requests:", outgoingTradeRequests.length)
-              console.log("Friend requests:", friendRequests.length)
-              console.log("Outgoing friend requests:", outgoingFriendRequests.length)
-
-              // Show raw data from Supabase
-              const { data: rawTradeRequests } = await supabase
-                .from("trade_requests")
-                .select("*")
-                .or(`requester_id.eq.${session.user.id},target_user_id.eq.${session.user.id}`)
-
-              console.log("Raw trade requests from DB:", rawTradeRequests)
-
-              Alert.alert(
-                "Debug Info",
-                `Pending Incoming: ${tradeRequests.length}\nPending Outgoing: ${outgoingTradeRequests.length}\nTotal DB Records: ${rawTradeRequests?.length || 0}\n\nNow only showing PENDING requests in counts`,
-                [
-                  {
-                    text: "Force Refresh All",
-                    onPress: async () => {
-                      console.log("Force refreshing all...")
-                      setLoading(true)
-                      await Promise.all([
-                        loadTradeRequests(),
-                        loadOutgoingTradeRequests(),
-                        loadFriendRequests(),
-                        loadOutgoingFriendRequests(),
-                        loadConversations(),
-                      ])
-                      setLoading(false)
-                    },
-                  },
-                  { text: "OK" },
-                ],
-              )
+              alert("Manually refreshing all requests...")
+              await Promise.all([
+                loadTradeRequests(),
+                loadOutgoingTradeRequests(),
+                loadFriendRequests(),
+                loadOutgoingFriendRequests(),
+              ])
+              alert("Manual refresh complete!")
             }}
-            buttonStyle={{ backgroundColor: "#f59e0b", marginTop: 20 }}
+            buttonStyle={{ backgroundColor: "#22c55e", marginTop: 10 }}
           />
         </View>
       </ScrollView>
