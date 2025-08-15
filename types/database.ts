@@ -51,6 +51,7 @@ export interface Database {
           estimated_value: number
           image_urls: string[]
           is_available: boolean
+          status: "available" | "traded" | "unavailable"
           created_at: string
           updated_at: string
         }
@@ -63,6 +64,7 @@ export interface Database {
           estimated_value: number
           image_urls?: string[]
           is_available?: boolean
+          status?: "available" | "traded" | "unavailable"
           created_at?: string
           updated_at?: string
         }
@@ -75,6 +77,7 @@ export interface Database {
           estimated_value?: number
           image_urls?: string[]
           is_available?: boolean
+          status?: "available" | "traded" | "unavailable"
           updated_at?: string
         }
       }
