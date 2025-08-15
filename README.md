@@ -9,6 +9,7 @@ A peer-to-peer barter marketplace built with React Native and Supabase.
 - 📸 Item listing with image upload
 - 💫 Tinder-style discovery interface
 - 🤝 Trade request system
+- 🌎 Location-based filtering
 - 💰 Item valuation (manual input, Python integration planned)
 
 ## Tech Stack
@@ -38,7 +39,6 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 
 - Python-based item valuation using web scraping
 - Advanced matching algorithms
-- Location-based filtering
 - Push notifications
 \`\`\`
 
