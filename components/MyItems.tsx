@@ -14,7 +14,7 @@ interface MyItemsProps {
 export default function MyItems({ session }: MyItemsProps) {
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<"available" | "unavailable">("available")
+  const [activeTab, setActiveTab] = useState<"available" | "unavailable" | "traded">("available")
   const [debugInfo, setDebugInfo] = useState<string[]>([])
 
   // Add debug logging function
@@ -57,8 +57,9 @@ export default function MyItems({ session }: MyItemsProps) {
     try {
       const action = currentAvailability ? "take down" : "repost"
       const newAvailability = !currentAvailability
+      const newStatus = newAvailability ? "available" : "unavailable"
 
-      addDebugLog(`Action: ${action}, New availability: ${newAvailability}`)
+      addDebugLog(`Action: ${action}, New availability: ${newAvailability}, New status: ${newStatus}`)
 
       // Proceed directly without confirmation
       addDebugLog("Proceeding with Supabase update...")
@@ -80,6 +81,7 @@ export default function MyItems({ session }: MyItemsProps) {
         .from("items")
         .update({
           is_available: newAvailability,
+          status: newStatus,
           updated_at: new Date().toISOString(),
         })
         .eq("id", itemId)
@@ -106,7 +108,14 @@ export default function MyItems({ session }: MyItemsProps) {
       // Update local state
       setItems((prevItems) =>
         prevItems.map((item) =>
-          item.id === itemId ? { ...item, is_available: newAvailability, updated_at: new Date().toISOString() } : item,
+          item.id === itemId
+            ? {
+                ...item,
+                is_available: newAvailability,
+                status: newStatus,
+                updated_at: new Date().toISOString(),
+              }
+            : item,
         ),
       )
 
@@ -199,10 +208,36 @@ export default function MyItems({ session }: MyItemsProps) {
     }
   }
 
-  const filteredItems = items.filter((item) => (activeTab === "available" ? item.is_available : !item.is_available))
+  const getFilteredItems = () => {
+    switch (activeTab) {
+      case "available":
+        return items.filter((item) => item.status === "available" && item.is_available)
+      case "unavailable":
+        return items.filter((item) => item.status === "unavailable" && !item.is_available)
+      case "traded":
+        return items.filter((item) => item.status === "traded")
+      default:
+        return []
+    }
+  }
+
+  const filteredItems = getFilteredItems()
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString()
+  }
+
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status) {
+      case "available":
+        return { backgroundColor: "#d1fae5", color: "#065f46" }
+      case "unavailable":
+        return { backgroundColor: "#fee2e2", color: "#991b1b" }
+      case "traded":
+        return { backgroundColor: "#dbeafe", color: "#1e40af" }
+      default:
+        return { backgroundColor: "#f3f4f6", color: "#374151" }
+    }
   }
 
   if (loading) {
@@ -232,7 +267,7 @@ export default function MyItems({ session }: MyItemsProps) {
             }}
           >
             <Text style={[styles.tabText, activeTab === "available" && styles.activeTabText]}>
-              Available ({items.filter((item) => item.is_available).length})
+              Available ({items.filter((item) => item.status === "available").length})
             </Text>
           </Pressable>
           <Pressable
@@ -247,7 +282,22 @@ export default function MyItems({ session }: MyItemsProps) {
             }}
           >
             <Text style={[styles.tabText, activeTab === "unavailable" && styles.activeTabText]}>
-              Taken Down ({items.filter((item) => !item.is_available).length})
+              Taken Down ({items.filter((item) => item.status === "unavailable").length})
+            </Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.tab,
+              activeTab === "traded" && styles.activeTab,
+              pressed && styles.tabPressed,
+            ]}
+            onPress={() => {
+              addDebugLog("Traded tab pressed")
+              setActiveTab("traded")
+            }}
+          >
+            <Text style={[styles.tabText, activeTab === "traded" && styles.activeTabText]}>
+              Traded ({items.filter((item) => item.status === "traded").length})
             </Text>
           </Pressable>
         </View>
@@ -291,13 +341,9 @@ export default function MyItems({ session }: MyItemsProps) {
                 </View>
 
                 <View style={styles.statusIndicator}>
-                  <View
-                    style={[styles.statusBadge, item.is_available ? styles.availableBadge : styles.unavailableBadge]}
-                  >
-                    <Text
-                      style={[styles.statusText, item.is_available ? styles.availableText : styles.unavailableText]}
-                    >
-                      {item.is_available ? "Available" : "Taken Down"}
+                  <View style={[styles.statusBadge, getStatusBadgeStyle(item.status)]}>
+                    <Text style={[styles.statusText, { color: getStatusBadgeStyle(item.status).color }]}>
+                      {item.status.toUpperCase()}
                     </Text>
                   </View>
                 </View>
@@ -308,36 +354,61 @@ export default function MyItems({ session }: MyItemsProps) {
               </Text>
 
               <View style={styles.itemActions}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.actionButton,
-                    item.is_available ? styles.takeDownButton : styles.repostButton,
-                    pressed && styles.buttonPressed,
-                  ]}
-                  onPress={() => {
-                    addDebugLog(`${item.is_available ? "Take down" : "Repost"} button pressed for ${item.title}`)
-                    toggleItemAvailability(item.id, item.is_available)
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.actionButtonText,
-                      item.is_available ? styles.takeDownButtonText : styles.repostButtonText,
-                    ]}
-                  >
-                    {item.is_available ? "Take Down" : "Repost"}
-                  </Text>
-                </Pressable>
+                {item.status === "traded" ? (
+                  <View style={styles.tradedActions}>
+                    <Text style={styles.tradedText}>This item has been traded</Text>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.actionButton,
+                        styles.deleteButton,
+                        pressed && styles.buttonPressed,
+                      ]}
+                      onPress={() => {
+                        addDebugLog(`Delete button pressed for traded item ${item.title}`)
+                        deleteItem(item.id, item.image_urls)
+                      }}
+                    >
+                      <Text style={styles.deleteButtonText}>Delete</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.actionButton,
+                        item.is_available ? styles.takeDownButton : styles.repostButton,
+                        pressed && styles.buttonPressed,
+                      ]}
+                      onPress={() => {
+                        addDebugLog(`${item.is_available ? "Take down" : "Repost"} button pressed for ${item.title}`)
+                        toggleItemAvailability(item.id, item.is_available)
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.actionButtonText,
+                          item.is_available ? styles.takeDownButtonText : styles.repostButtonText,
+                        ]}
+                      >
+                        {item.is_available ? "Take Down" : "Repost"}
+                      </Text>
+                    </Pressable>
 
-                <Pressable
-                  style={({ pressed }) => [styles.actionButton, styles.deleteButton, pressed && styles.buttonPressed]}
-                  onPress={() => {
-                    addDebugLog(`Delete button pressed for ${item.title}`)
-                    deleteItem(item.id, item.image_urls)
-                  }}
-                >
-                  <Text style={styles.deleteButtonText}>Delete</Text>
-                </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.actionButton,
+                        styles.deleteButton,
+                        pressed && styles.buttonPressed,
+                      ]}
+                      onPress={() => {
+                        addDebugLog(`Delete button pressed for ${item.title}`)
+                        deleteItem(item.id, item.image_urls)
+                      }}
+                    >
+                      <Text style={styles.deleteButtonText}>Delete</Text>
+                    </Pressable>
+                  </>
+                )}
               </View>
             </View>
           ))
@@ -345,12 +416,14 @@ export default function MyItems({ session }: MyItemsProps) {
           <View style={styles.emptyState}>
             <Feather name="package" size={48} color="#94a3b8" />
             <Text style={styles.emptyTitle}>
-              {activeTab === "available" ? "No Available Items" : "No Taken Down Items"}
+              {activeTab === "available" && "No Available Items"}
+              {activeTab === "unavailable" && "No Taken Down Items"}
+              {activeTab === "traded" && "No Traded Items"}
             </Text>
             <Text style={styles.emptySubtitle}>
-              {activeTab === "available"
-                ? "Start by adding your first item to trade!"
-                : "Items you take down will appear here."}
+              {activeTab === "available" && "Start by adding your first item to trade!"}
+              {activeTab === "unavailable" && "Items you take down will appear here."}
+              {activeTab === "traded" && "Items traded through the app will appear here."}
             </Text>
           </View>
         )}
@@ -418,9 +491,10 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   tabText: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
     color: "#64748b",
+    textAlign: "center",
   },
   activeTabText: {
     color: "#3b82f6",
@@ -477,6 +551,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#e2e8f0",
     justifyContent: "center",
     alignItems: "center",
+    borderRadius: 12,
   },
   imageCount: {
     position: "absolute",
@@ -521,21 +596,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
   },
-  availableBadge: {
-    backgroundColor: "#6ee7b7",
-  },
-  unavailableBadge: {
-    backgroundColor: "#f87171",
-  },
   statusText: {
     fontSize: 12,
     fontWeight: "bold",
-  },
-  availableText: {
-    color: "#065f46",
-  },
-  unavailableText: {
-    color: "#732d2d",
   },
   itemDescription: {
     fontSize: 14,
@@ -545,6 +608,17 @@ const styles = StyleSheet.create({
   itemActions: {
     flexDirection: "row",
     justifyContent: "space-between",
+  },
+  tradedActions: {
+    flex: 1,
+    alignItems: "center",
+  },
+  tradedText: {
+    fontSize: 14,
+    color: "#1e40af",
+    fontStyle: "italic",
+    marginBottom: 12,
+    textAlign: "center",
   },
   actionButton: {
     paddingVertical: 8,
@@ -581,6 +655,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    paddingVertical: 60,
   },
   emptyTitle: {
     fontSize: 18,
