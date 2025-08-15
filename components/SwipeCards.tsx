@@ -119,33 +119,60 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
         })),
       })
 
-      // Step 4: Check existing trade requests
+      // Step 4: Check existing trade requests (both pending and accepted)
       const { data: existingRequests, error: requestsError } = await supabase
         .from("trade_requests")
-        .select("target_item_id")
+        .select("target_item_id, status")
         .eq("requester_id", session.user.id)
+        .in("status", ["pending", "accepted"]) // Filter out both pending and accepted
 
       debug.steps.push({
-        step: "4. Existing trade requests",
+        step: "4. Existing trade requests (pending + accepted)",
         count: existingRequests?.length || 0,
         error: requestsError,
         requestedItemIds: existingRequests?.map((req) => req.target_item_id),
+        statuses: existingRequests?.map((req) => req.status),
       })
 
-      // Step 5: Apply filtering
+      // Step 4.5: Check which specific items are involved in accepted trades (both as requester and target)
+      const userItemIds = userItems.map((item) => item.id)
+      const { data: acceptedTrades, error: acceptedTradesError } = await supabase
+        .from("trade_requests")
+        .select("requester_item_id, target_item_id")
+        .or(`requester_item_id.in.(${userItemIds.join(",")}),target_item_id.in.(${userItemIds.join(",")})`)
+        .eq("status", "accepted")
+
+      debug.steps.push({
+        step: "4.5. Items involved in accepted trades",
+        count: acceptedTrades?.length || 0,
+        error: acceptedTradesError,
+        trades: acceptedTrades,
+      })
+
+      // Get all item IDs that are involved in accepted trades
+      const acceptedTradeItemIds = new Set()
+      acceptedTrades?.forEach((trade) => {
+        acceptedTradeItemIds.add(trade.requester_item_id)
+        acceptedTradeItemIds.add(trade.target_item_id)
+      })
+
+      // Step 5: Apply filtering (updated to only filter specific items, not all items from trading users)
       const requestedItemIds = new Set(existingRequests?.map((req) => req.target_item_id) || [])
       const filteredItems =
         otherUsersItems?.filter((item) => {
           const isSwipedItem = swipedItemIds.has(item.id)
           const isRequestedItem = requestedItemIds.has(item.id)
-          return !isSwipedItem && !isRequestedItem
+          const isInAcceptedTrade = acceptedTradeItemIds.has(item.id)
+          return !isSwipedItem && !isRequestedItem && !isInAcceptedTrade
         }) || []
 
       debug.steps.push({
-        step: "5. After filtering",
+        step: "5. After filtering (updated - specific items only)",
         count: filteredItems.length,
         swipedItemsCount: swipedItemIds.size,
         requestedItemsCount: requestedItemIds.size,
+        acceptedTradeItemsCount: acceptedTradeItemIds.size,
+        acceptedTradeItems: Array.from(acceptedTradeItemIds),
       })
 
       // Step 6: Get profiles
@@ -822,6 +849,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#3b82f6",
     borderRadius: 12,
     paddingVertical: 16,
-    marginTop: "auto",
+    marginTop: 20,
   },
 })
