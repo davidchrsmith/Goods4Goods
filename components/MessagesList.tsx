@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from "react-native"
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native"
 import { supabase } from "../lib/supabase"
 import type { Session } from "@supabase/supabase-js"
 import type { Conversation, Profile, Message, Friendship, TradeRequest, Item } from "../types/database"
@@ -152,7 +152,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       setConversations(conversationsWithDetails)
     } catch (error) {
       console.error("Error loading conversations:", error)
-      Alert.alert("Error", "Failed to load conversations")
     } finally {
       setLoading(false)
     }
@@ -170,7 +169,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (friendshipError) {
         console.error("Error loading friendships:", friendshipError)
-        alert(`Error loading friendships: ${friendshipError.message}`)
         setFriendRequests([])
         return
       }
@@ -185,7 +183,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
         if (profilesError) {
           console.error("Error loading requester profiles:", profilesError)
-          alert(`Error loading requester profiles: ${profilesError.message}`)
           setFriendRequests([])
           return
         }
@@ -209,14 +206,11 @@ export default function MessagesList({ session, onConversationSelect }: Messages
         }))
 
         setFriendRequests(friendRequestsWithProfiles)
-        alert(`Loaded ${friendRequestsWithProfiles.length} friend requests`)
       } else {
         setFriendRequests([])
-        alert("No friend requests found")
       }
     } catch (error) {
       console.error("Error loading friend requests:", error)
-      alert(`Exception loading friend requests: ${error.message}`)
     }
   }
 
@@ -235,14 +229,12 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (tradeRequestError) {
         console.error("Error loading trade requests:", tradeRequestError)
-        alert(`Error loading trade requests: ${tradeRequestError.message}`)
         setTradeRequests([])
         return
       }
 
       if (!tradeRequestData || tradeRequestData.length === 0) {
         setTradeRequests([])
-        alert("No incoming trade requests found")
         return
       }
 
@@ -265,7 +257,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (profilesError || itemsError) {
         console.error("Error loading related data:", { profilesError, itemsError })
-        alert(`Error loading related data: ${profilesError?.message || itemsError?.message}`)
         setTradeRequests([])
         return
       }
@@ -279,10 +270,8 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       }))
 
       setTradeRequests(tradeRequestsWithDetails)
-      alert(`Loaded ${tradeRequestsWithDetails.length} incoming trade requests`)
     } catch (error) {
       console.error("Error loading trade requests:", error)
-      alert(`Exception loading trade requests: ${error.message}`)
     }
   }
 
@@ -301,14 +290,12 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (tradeRequestError) {
         console.error("Error loading outgoing trade requests:", tradeRequestError)
-        alert(`Error loading outgoing trade requests: ${tradeRequestError.message}`)
         setOutgoingTradeRequests([])
         return
       }
 
       if (!tradeRequestData || tradeRequestData.length === 0) {
         setOutgoingTradeRequests([])
-        alert("No outgoing trade requests found")
         return
       }
 
@@ -331,7 +318,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (profilesError || itemsError) {
         console.error("Error loading related data:", { profilesError, itemsError })
-        alert(`Error loading related data: ${profilesError?.message || itemsError?.message}`)
         setOutgoingTradeRequests([])
         return
       }
@@ -345,10 +331,8 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       }))
 
       setOutgoingTradeRequests(tradeRequestsWithDetails)
-      alert(`Loaded ${tradeRequestsWithDetails.length} outgoing trade requests`)
     } catch (error) {
       console.error("Error loading outgoing trade requests:", error)
-      alert(`Exception loading outgoing trade requests: ${error.message}`)
     }
   }
 
@@ -364,7 +348,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (friendshipError) {
         console.error("Error loading outgoing friendships:", friendshipError)
-        alert(`Error loading outgoing friendships: ${friendshipError.message}`)
         setOutgoingFriendRequests([])
         return
       }
@@ -379,7 +362,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
         if (profilesError) {
           console.error("Error loading addressee profiles:", profilesError)
-          alert(`Error loading addressee profiles: ${profilesError.message}`)
           setOutgoingFriendRequests([])
           return
         }
@@ -403,14 +385,11 @@ export default function MessagesList({ session, onConversationSelect }: Messages
         }))
 
         setOutgoingFriendRequests(friendRequestsWithProfiles)
-        alert(`Loaded ${friendRequestsWithProfiles.length} outgoing friend requests`)
       } else {
         setOutgoingFriendRequests([])
-        alert("No outgoing friend requests found")
       }
     } catch (error) {
       console.error("Error loading outgoing friend requests:", error)
-      alert(`Exception loading outgoing friend requests: ${error.message}`)
     }
   }
 
@@ -485,8 +464,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
       if (error) throw error
 
-      Alert.alert("Success", status === "accepted" ? "Friend request accepted!" : "Friend request declined")
-
       // Remove the request from local state immediately for better UX
       setFriendRequests((prev) => prev.filter((req) => req.id !== requestId))
 
@@ -494,7 +471,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       loadFriendRequests()
     } catch (error) {
       console.error("Error responding to friend request:", error)
-      Alert.alert("Error", "Failed to respond to friend request")
     }
   }
 
@@ -505,7 +481,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       // Find the request in our local state to get details
       const request = tradeRequests.find((req) => req.id === requestId)
       if (!request) {
-        Alert.alert("Error", "Trade request not found")
+        console.error("Trade request not found")
         return
       }
 
@@ -537,23 +513,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
           // Reload conversations to show the new message
           loadConversations()
-
-          Alert.alert(
-            "Trade Accepted!",
-            "The trade request has been accepted and a message has been sent to coordinate the trade.",
-            [
-              {
-                text: "View Messages",
-                onPress: () => setActiveTab("messages"),
-              },
-              { text: "OK" },
-            ],
-          )
-        } else {
-          Alert.alert("Trade Accepted!", "The trade request has been accepted!")
         }
-      } else {
-        Alert.alert("Trade Declined", "The trade request has been declined.")
       }
 
       // Reload to ensure consistency
@@ -561,7 +521,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       loadOutgoingTradeRequests()
     } catch (error) {
       console.error("Error responding to trade request:", error)
-      Alert.alert("Error", "Failed to respond to trade request")
     }
   }
 
@@ -710,8 +669,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
                         <View style={styles.requestContent}>
                           <Text style={styles.requestTitle}>Friend Request</Text>
                           <Text style={styles.requestUser}>
-                            {request.requester_profile.full_name} (@{request.requester_profile.username}) wants to be
-                            friends
+                            {request.requester_profile?.full_name || "Someone"} wants to be friends
                           </Text>
                           <Text style={styles.requestTime}>{formatTime(request.created_at)}</Text>
 
@@ -853,24 +811,6 @@ export default function MessagesList({ session, onConversationSelect }: Messages
             )}
           </View>
         )}
-
-        {/* Debug section */}
-        <View style={styles.debugSection}>
-          <Button
-            title="Manual Refresh Requests"
-            onPress={async () => {
-              alert("Manually refreshing all requests...")
-              await Promise.all([
-                loadTradeRequests(),
-                loadOutgoingTradeRequests(),
-                loadFriendRequests(),
-                loadOutgoingFriendRequests(),
-              ])
-              alert("Manual refresh complete!")
-            }}
-            buttonStyle={{ backgroundColor: "#22c55e", marginTop: 10 }}
-          />
-        </View>
       </ScrollView>
     </View>
   )
@@ -1163,9 +1103,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: "#374151",
-  },
-  debugSection: {
-    alignItems: "center",
-    paddingVertical: 20,
   },
 })
