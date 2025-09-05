@@ -12,6 +12,8 @@ import FriendSearch from "./FriendSearch"
 interface MessagesListProps {
   session: Session
   onConversationSelect: (conversation: ConversationWithDetails) => void
+  shouldRefresh?: boolean
+  onRefreshComplete?: () => void
 }
 
 interface ConversationWithDetails extends Conversation {
@@ -32,7 +34,12 @@ interface TradeRequestWithDetails extends TradeRequest {
   target_profile?: Profile
 }
 
-export default function MessagesList({ session, onConversationSelect }: MessagesListProps) {
+export default function MessagesList({
+  session,
+  onConversationSelect,
+  shouldRefresh,
+  onRefreshComplete,
+}: MessagesListProps) {
   const [conversations, setConversations] = useState<ConversationWithDetails[]>([])
   const [friendRequests, setFriendRequests] = useState<FriendRequestWithProfile[]>([])
   const [tradeRequests, setTradeRequests] = useState<TradeRequestWithDetails[]>([])
@@ -52,17 +59,27 @@ export default function MessagesList({ session, onConversationSelect }: Messages
 
     // Subscribe to real-time updates
     const conversationsSubscription = supabase
-      .channel("conversations")
-      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, () => loadConversations())
+      .channel("conversations-updates")
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, () => {
+        console.log("Conversations updated, reloading...")
+        loadConversations()
+      })
       .subscribe()
 
     const messagesSubscription = supabase
-      .channel("messages")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, () => loadConversations())
+      .channel("messages-updates")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, (payload) => {
+        console.log("New message inserted, reloading conversations...")
+        loadConversations()
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, (payload) => {
+        console.log("Message updated (possibly read status), reloading conversations...")
+        loadConversations()
+      })
       .subscribe()
 
     const friendshipsSubscription = supabase
-      .channel("friendships")
+      .channel("friendships-updates")
       .on("postgres_changes", { event: "*", schema: "public", table: "friendships" }, () => {
         loadFriendRequests()
         loadOutgoingFriendRequests()
@@ -70,7 +87,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       .subscribe()
 
     const tradeRequestsSubscription = supabase
-      .channel("trade_requests")
+      .channel("trade-requests-updates")
       .on("postgres_changes", { event: "*", schema: "public", table: "trade_requests" }, () => {
         loadTradeRequests()
         loadOutgoingTradeRequests()
@@ -84,6 +101,15 @@ export default function MessagesList({ session, onConversationSelect }: Messages
       tradeRequestsSubscription.unsubscribe()
     }
   }, [])
+
+  useEffect(() => {
+    if (shouldRefresh) {
+      console.log("Refreshing conversations after returning from chat...")
+      loadConversations().then(() => {
+        onRefreshComplete?.()
+      })
+    }
+  }, [shouldRefresh])
 
   async function loadConversations() {
     try {
@@ -111,22 +137,46 @@ export default function MessagesList({ session, onConversationSelect }: Messages
           // Get other user's profile
           const { data: profile } = await supabase.from("profiles").select("*").eq("id", otherUserId).single()
 
-          // Get last message
-          const { data: lastMessage } = await supabase
-            .from("messages")
-            .select("*")
-            .eq("conversation_id", conversation.id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .single()
+          // Get last message - handle 406 errors gracefully
+          let lastMessage = null
+          try {
+            const { data: lastMessageData, error: lastMessageError } = await supabase
+              .from("messages")
+              .select("*")
+              .eq("conversation_id", conversation.id)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle() // Use maybeSingle() instead of single() to handle no results
 
-          // Get unread count
-          const { count: unreadCount } = await supabase
-            .from("messages")
-            .select("*", { count: "exact", head: true })
-            .eq("conversation_id", conversation.id)
-            .eq("is_read", false)
-            .neq("sender_id", session.user.id)
+            if (lastMessageError && lastMessageError.code !== "PGRST116") {
+              console.warn(`Error fetching last message for conversation ${conversation.id}:`, lastMessageError)
+            } else {
+              lastMessage = lastMessageData
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch last message for conversation ${conversation.id}:`, error)
+          }
+
+          // Get unread count with better error handling
+          let unreadCount = 0
+          try {
+            const { data: unreadMessages, error: unreadError } = await supabase
+              .from("messages")
+              .select("id")
+              .eq("conversation_id", conversation.id)
+              .eq("is_read", false)
+              .neq("sender_id", session.user.id)
+
+            if (unreadError) {
+              console.error("Error fetching unread messages for conversation", conversation.id, unreadError)
+            } else {
+              unreadCount = unreadMessages?.length || 0
+            }
+          } catch (error) {
+            console.warn(`Failed to get unread count for conversation ${conversation.id}:`, error)
+          }
+
+          console.log(`Conversation ${conversation.id}: unread count = ${unreadCount}`)
 
           return {
             ...conversation,
@@ -143,8 +193,8 @@ export default function MessagesList({ session, onConversationSelect }: Messages
               created_at: "",
               updated_at: "",
             },
-            last_message: lastMessage || null,
-            unread_count: unreadCount || 0,
+            last_message: lastMessage,
+            unread_count: unreadCount,
           }
         }),
       )
@@ -540,6 +590,103 @@ export default function MessagesList({ session, onConversationSelect }: Messages
   const totalRequests =
     friendRequests.length + tradeRequests.length + outgoingFriendRequests.length + outgoingTradeRequests.length
 
+  const handleConversationSelect = async (conversation: ConversationWithDetails) => {
+    console.log(`=== SELECTING CONVERSATION ===`)
+    console.log(`Conversation ID: ${conversation.id}`)
+    console.log(`Current unread count: ${conversation.unread_count}`)
+
+    // Update local state immediately for better UX - set to 0 permanently
+    setConversations((prev) =>
+      prev.map((conv) => {
+        if (conv.id === conversation.id) {
+          console.log(`Setting unread count to 0 for conversation ${conv.id}`)
+          return { ...conv, unread_count: 0 }
+        }
+        return conv
+      }),
+    )
+
+    // Navigate to chat immediately
+    const updatedConversation = { ...conversation, unread_count: 0 }
+    console.log("Navigating to chat with updated conversation:", updatedConversation.unread_count)
+    onConversationSelect(updatedConversation)
+
+    // Try multiple approaches to mark messages as read in the background
+    if (conversation.unread_count > 0) {
+      console.log("Background: Attempting to mark messages as read...")
+
+      // Approach 1: Try using RPC function (we'll create this)
+      try {
+        const { data: rpcResult, error: rpcError } = await supabase.rpc("mark_conversation_messages_read", {
+          conv_id: conversation.id,
+          user_id: session.user.id,
+        })
+
+        if (rpcError) {
+          console.log("RPC approach failed:", rpcError.message)
+        } else {
+          console.log("RPC approach succeeded:", rpcResult)
+          return // Success, no need to try other approaches
+        }
+      } catch (error) {
+        console.log("RPC approach error:", error)
+      }
+
+      // Approach 2: Direct update with conversation_id and sender_id
+      try {
+        const { data: directUpdate, error: directError } = await supabase
+          .from("messages")
+          .update({ is_read: true })
+          .eq("conversation_id", conversation.id)
+          .neq("sender_id", session.user.id)
+          .eq("is_read", false)
+          .select()
+
+        if (directError) {
+          console.log("Direct update failed:", directError.message)
+        } else {
+          console.log(`Direct update succeeded: marked ${directUpdate?.length || 0} messages as read`)
+          return // Success
+        }
+      } catch (error) {
+        console.log("Direct update error:", error)
+      }
+
+      // Approach 3: Update each message individually
+      try {
+        const { data: unreadMessages } = await supabase
+          .from("messages")
+          .select("id")
+          .eq("conversation_id", conversation.id)
+          .eq("is_read", false)
+          .neq("sender_id", session.user.id)
+
+        if (unreadMessages && unreadMessages.length > 0) {
+          console.log("Individual update: found messages to update:", unreadMessages.length)
+
+          for (const message of unreadMessages) {
+            try {
+              const { error: individualError } = await supabase
+                .from("messages")
+                .update({ is_read: true })
+                .eq("id", message.id)
+
+              if (individualError) {
+                console.log(`Failed to update message ${message.id}:`, individualError.message)
+              } else {
+                console.log(`Successfully updated message ${message.id}`)
+              }
+            } catch (error) {
+              console.log(`Error updating message ${message.id}:`, error)
+            }
+          }
+        }
+      } catch (error) {
+        console.log("Individual update error:", error)
+      }
+    }
+  }
+
   if (showFriendSearch) {
     return <FriendSearch session={session} onBack={() => setShowFriendSearch(false)} />
   }
@@ -588,7 +735,7 @@ export default function MessagesList({ session, onConversationSelect }: Messages
               <TouchableOpacity
                 key={conversation.id}
                 style={styles.conversationItem}
-                onPress={() => onConversationSelect(conversation)}
+                onPress={() => handleConversationSelect(conversation)}
               >
                 <Avatar
                   size={50}

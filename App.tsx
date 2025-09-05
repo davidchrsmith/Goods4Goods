@@ -21,9 +21,8 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("discover")
-
-  // Chat state
   const [selectedConversation, setSelectedConversation] = useState<any>(null)
+  const [shouldRefreshMessages, setShouldRefreshMessages] = useState(false)
 
   useEffect(() => {
     // Get initial session
@@ -84,6 +83,7 @@ export default function App() {
 
   const handleBackToMessages = () => {
     setSelectedConversation(null)
+    setShouldRefreshMessages(true) // Trigger refresh when returning to messages
   }
 
   if (loading) {
@@ -122,7 +122,14 @@ export default function App() {
       case "my-items":
         return <MyItems session={session} />
       case "messages":
-        return <MessagesList session={session} onConversationSelect={handleConversationSelect} />
+        return (
+          <MessagesList
+            session={session}
+            onConversationSelect={handleConversationSelect}
+            shouldRefresh={shouldRefreshMessages}
+            onRefreshComplete={() => setShouldRefreshMessages(false)}
+          />
+        )
       case "profile":
         return <ProfileComponent session={session} onProfileComplete={handleProfileComplete} />
       default:

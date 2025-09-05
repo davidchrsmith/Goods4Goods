@@ -32,12 +32,16 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
   const scrollViewRef = useRef<ScrollView>(null)
 
   useEffect(() => {
-    loadMessages()
-    markMessagesAsRead()
+    const initializeChat = async () => {
+      await loadMessages()
+      await markMessagesAsRead()
+    }
 
-    // Subscribe to real-time message updates
+    initializeChat()
+
+    // Subscribe to real-time message updates with better filtering
     const messagesSubscription = supabase
-      .channel(`messages:${conversationId}`)
+      .channel(`messages-${conversationId}`)
       .on(
         "postgres_changes",
         {
@@ -47,8 +51,15 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
           filter: `conversation_id=eq.${conversationId}`,
         },
         (payload) => {
+          console.log("New message received:", payload.new)
           const newMessage = payload.new as Message
-          setMessages((prev) => [...prev, newMessage])
+          setMessages((prev) => {
+            // Avoid duplicates
+            if (prev.some((msg) => msg.id === newMessage.id)) {
+              return prev
+            }
+            return [...prev, newMessage]
+          })
 
           // Mark as read if not sent by current user
           if (newMessage.sender_id !== session.user.id) {
@@ -58,7 +69,10 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
       )
       .subscribe()
 
+    console.log("Subscribed to messages for conversation:", conversationId)
+
     return () => {
+      console.log("Unsubscribing from messages")
       messagesSubscription.unsubscribe()
     }
   }, [conversationId])
@@ -91,12 +105,16 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
 
   async function markMessagesAsRead() {
     try {
-      await supabase
+      const { error } = await supabase
         .from("messages")
         .update({ is_read: true })
         .eq("conversation_id", conversationId)
         .eq("is_read", false)
         .neq("sender_id", session.user.id)
+
+      if (error) throw error
+
+      console.log("Messages marked as read for conversation:", conversationId)
     } catch (error) {
       console.error("Error marking messages as read:", error)
     }
@@ -113,22 +131,47 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
   async function sendMessage() {
     if (!newMessage.trim() || sending) return
 
+    const messageContent = newMessage.trim()
+    const tempId = `temp-${Date.now()}`
+
+    // Create temporary message for immediate UI update
+    const tempMessage: Message = {
+      id: tempId,
+      conversation_id: conversationId,
+      sender_id: session.user.id,
+      content: messageContent,
+      is_read: true,
+      created_at: new Date().toISOString(),
+    }
+
     try {
       setSending(true)
+      setNewMessage("")
 
-      const { error } = await supabase.from("messages").insert([
-        {
-          conversation_id: conversationId,
-          sender_id: session.user.id,
-          content: newMessage.trim(),
-        },
-      ])
+      // Add message to UI immediately
+      setMessages((prev) => [...prev, tempMessage])
+
+      const { data, error } = await supabase
+        .from("messages")
+        .insert([
+          {
+            conversation_id: conversationId,
+            sender_id: session.user.id,
+            content: messageContent,
+          },
+        ])
+        .select()
+        .single()
 
       if (error) throw error
 
-      setNewMessage("")
+      // Replace temp message with real message
+      setMessages((prev) => prev.map((msg) => (msg.id === tempId ? data : msg)))
     } catch (error) {
       console.error("Error sending message:", error)
+      // Remove temp message on error
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId))
+      setNewMessage(messageContent) // Restore message text
       Alert.alert("Error", "Failed to send message")
     } finally {
       setSending(false)
