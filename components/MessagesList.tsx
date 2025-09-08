@@ -49,6 +49,7 @@ export default function MessagesList({
   const [showFriendSearch, setShowFriendSearch] = useState(false)
   const [activeTab, setActiveTab] = useState<"messages" | "requests">("messages")
   const [requestsSubTab, setRequestsSubTab] = useState<"incoming" | "outgoing">("incoming")
+  const [unreadConversationsCount, setUnreadConversationsCount] = useState(0)
 
   useEffect(() => {
     loadConversations()
@@ -126,6 +127,7 @@ export default function MessagesList({
 
       if (!conversationsData || conversationsData.length === 0) {
         setConversations([])
+        setUnreadConversationsCount(0)
         return
       }
 
@@ -200,6 +202,10 @@ export default function MessagesList({
       )
 
       setConversations(conversationsWithDetails)
+
+      // Calculate conversations with unread messages
+      const conversationsWithUnread = conversationsWithDetails.filter((conv) => conv.unread_count > 0)
+      setUnreadConversationsCount(conversationsWithUnread.length)
     } catch (error) {
       console.error("Error loading conversations:", error)
     } finally {
@@ -685,6 +691,10 @@ export default function MessagesList({
         console.log("Individual update error:", error)
       }
     }
+
+    // Recalculate unread conversations count
+    const updatedConversationsWithUnread = conversations.filter((conv) => conv.unread_count > 0)
+    setUnreadConversationsCount(updatedConversationsWithUnread.length)
   }
 
   if (showFriendSearch) {
@@ -715,7 +725,7 @@ export default function MessagesList({
           onPress={() => setActiveTab("messages")}
         >
           <Text style={[styles.tabText, activeTab === "messages" && styles.activeTabText]}>
-            Messages ({conversations.length})
+            Messages ({unreadConversationsCount})
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
