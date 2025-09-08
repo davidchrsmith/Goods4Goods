@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native"
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal } from "react-native"
 import { supabase } from "../lib/supabase"
 import type { Session } from "@supabase/supabase-js"
 import type { Conversation, Profile, Message, Friendship, TradeRequest, Item } from "../types/database"
@@ -49,7 +49,11 @@ export default function MessagesList({
   const [showFriendSearch, setShowFriendSearch] = useState(false)
   const [activeTab, setActiveTab] = useState<"messages" | "requests">("messages")
   const [requestsSubTab, setRequestsSubTab] = useState<"incoming" | "outgoing">("incoming")
-  const [unreadConversationsCount, setUnreadConversationsCount] = useState(0)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [conversationToDelete, setConversationToDelete] = useState<ConversationWithDetails | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  const unreadConversationsCount = conversations.filter((conv) => conv.unread_count > 0).length
 
   useEffect(() => {
     loadConversations()
@@ -127,7 +131,6 @@ export default function MessagesList({
 
       if (!conversationsData || conversationsData.length === 0) {
         setConversations([])
-        setUnreadConversationsCount(0)
         return
       }
 
@@ -202,10 +205,6 @@ export default function MessagesList({
       )
 
       setConversations(conversationsWithDetails)
-
-      // Calculate conversations with unread messages
-      const conversationsWithUnread = conversationsWithDetails.filter((conv) => conv.unread_count > 0)
-      setUnreadConversationsCount(conversationsWithUnread.length)
     } catch (error) {
       console.error("Error loading conversations:", error)
     } finally {
@@ -580,23 +579,67 @@ export default function MessagesList({
     }
   }
 
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString)
-    const now = new Date()
-    const diffInHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60)
+  async function deleteConversation(conversationId: string) {
+    try {
+      setDeleting(true)
+      console.log(`=== DELETING CONVERSATION ===`)
+      console.log(`Conversation ID: ${conversationId}`)
 
-    if (diffInHours < 24) {
-      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    } else {
-      return date.toLocaleDateString()
+      // First, delete all messages in the conversation
+      const { error: messagesError } = await supabase.from("messages").delete().eq("conversation_id", conversationId)
+
+      if (messagesError) {
+        console.error("Error deleting messages:", messagesError)
+        throw messagesError
+      }
+
+      // Then delete the conversation itself
+      const { error: conversationError } = await supabase
+        .from("conversations")
+        .delete()
+        .eq("id", conversationId)
+        .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
+
+      if (conversationError) {
+        console.error("Error deleting conversation:", conversationError)
+        throw conversationError
+      }
+
+      // Update local state immediately
+      setConversations((prev) => prev.filter((conv) => conv.id !== conversationId))
+
+      console.log("Conversation deleted successfully")
+      setShowDeleteModal(false)
+      setConversationToDelete(null)
+    } catch (error) {
+      console.error("Error deleting conversation:", error)
+      // For web compatibility, we'll use a simple alert fallback
+      if (typeof window !== "undefined" && window.alert) {
+        window.alert("Failed to delete conversation. Please try again.")
+      }
+    } finally {
+      setDeleting(false)
     }
   }
 
-  // Only count pending requests for the badge
-  const totalRequests =
-    friendRequests.length + tradeRequests.length + outgoingFriendRequests.length + outgoingTradeRequests.length
+  const handleDeleteConversation = (conversation: ConversationWithDetails) => {
+    console.log("Delete button clicked for conversation:", conversation.id)
+    setConversationToDelete(conversation)
+    setShowDeleteModal(true)
+  }
 
-  const handleConversationSelect = async (conversation: ConversationWithDetails) => {
+  const confirmDelete = () => {
+    if (conversationToDelete) {
+      deleteConversation(conversationToDelete.id)
+    }
+  }
+
+  const cancelDelete = () => {
+    setShowDeleteModal(false)
+    setConversationToDelete(null)
+  }
+
+  async function handleConversationSelect(conversation: ConversationWithDetails) {
     console.log(`=== SELECTING CONVERSATION ===`)
     console.log(`Conversation ID: ${conversation.id}`)
     console.log(`Current unread count: ${conversation.unread_count}`)
@@ -691,11 +734,23 @@ export default function MessagesList({
         console.log("Individual update error:", error)
       }
     }
-
-    // Recalculate unread conversations count
-    const updatedConversationsWithUnread = conversations.filter((conv) => conv.unread_count > 0)
-    setUnreadConversationsCount(updatedConversationsWithUnread.length)
   }
+
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diffInHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60)
+
+    if (diffInHours < 24) {
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    } else {
+      return date.toLocaleDateString()
+    }
+  }
+
+  // Only count pending requests for the badge
+  const totalRequests =
+    friendRequests.length + tradeRequests.length + outgoingFriendRequests.length + outgoingTradeRequests.length
 
   if (showFriendSearch) {
     return <FriendSearch session={session} onBack={() => setShowFriendSearch(false)} />
@@ -742,39 +797,46 @@ export default function MessagesList({
         {activeTab === "messages" ? (
           conversations.length > 0 ? (
             conversations.map((conversation) => (
-              <TouchableOpacity
-                key={conversation.id}
-                style={styles.conversationItem}
-                onPress={() => handleConversationSelect(conversation)}
-              >
-                <Avatar
-                  size={50}
-                  rounded
-                  source={conversation.other_user.avatar_url ? { uri: conversation.other_user.avatar_url } : undefined}
-                  icon={!conversation.other_user.avatar_url ? { name: "user", type: "feather" } : undefined}
-                  containerStyle={styles.avatar}
-                />
+              <View key={conversation.id} style={styles.conversationWrapper}>
+                <TouchableOpacity
+                  style={styles.conversationItem}
+                  onPress={() => handleConversationSelect(conversation)}
+                >
+                  <Avatar
+                    size={50}
+                    rounded
+                    source={
+                      conversation.other_user.avatar_url ? { uri: conversation.other_user.avatar_url } : undefined
+                    }
+                    icon={!conversation.other_user.avatar_url ? { name: "user", type: "feather" } : undefined}
+                    containerStyle={styles.avatar}
+                  />
 
-                <View style={styles.conversationContent}>
-                  <View style={styles.conversationHeader}>
-                    <Text style={styles.userName}>{conversation.other_user.full_name || "Unknown User"}</Text>
-                    {conversation.last_message && (
-                      <Text style={styles.timestamp}>{formatTime(conversation.last_message.created_at)}</Text>
-                    )}
-                  </View>
+                  <View style={styles.conversationContent}>
+                    <View style={styles.conversationHeader}>
+                      <Text style={styles.userName}>{conversation.other_user.full_name || "Unknown User"}</Text>
+                      {conversation.last_message && (
+                        <Text style={styles.timestamp}>{formatTime(conversation.last_message.created_at)}</Text>
+                      )}
+                    </View>
 
-                  <View style={styles.messagePreview}>
-                    <Text style={styles.lastMessage} numberOfLines={1}>
-                      {conversation.last_message?.content || "No messages yet"}
-                    </Text>
-                    {conversation.unread_count > 0 && (
-                      <View style={styles.unreadBadge}>
-                        <Text style={styles.unreadCount}>{conversation.unread_count}</Text>
-                      </View>
-                    )}
+                    <View style={styles.messagePreview}>
+                      <Text style={styles.lastMessage} numberOfLines={1}>
+                        {conversation.last_message?.content || "No messages yet"}
+                      </Text>
+                      {conversation.unread_count > 0 && (
+                        <View style={styles.unreadBadge}>
+                          <Text style={styles.unreadCount}>{conversation.unread_count}</Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
-                </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.deleteButton} onPress={() => handleDeleteConversation(conversation)}>
+                  <Feather name="trash-2" size={20} color="#ef4444" />
+                </TouchableOpacity>
+              </View>
             ))
           ) : (
             <View style={styles.emptyState}>
@@ -969,6 +1031,35 @@ export default function MessagesList({
           </View>
         )}
       </ScrollView>
+
+      {/* Delete Confirmation Modal */}
+      <Modal visible={showDeleteModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Delete Conversation</Text>
+            </View>
+
+            <View style={styles.modalBody}>
+              <Text style={styles.modalText}>
+                Are you sure you want to delete your conversation with{" "}
+                <Text style={styles.modalUserName}>{conversationToDelete?.other_user.full_name || "this user"}</Text>?
+              </Text>
+              <Text style={styles.modalSubtext}>This action cannot be undone.</Text>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={cancelDelete} disabled={deleting}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.modalDeleteButton} onPress={confirmDelete} disabled={deleting}>
+                <Text style={styles.modalDeleteText}>{deleting ? "Deleting..." : "Delete"}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -1038,12 +1129,17 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
-  conversationItem: {
+  conversationWrapper: {
     flexDirection: "row",
-    padding: 16,
     backgroundColor: "white",
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
+    alignItems: "center",
+  },
+  conversationItem: {
+    flex: 1,
+    flexDirection: "row",
+    padding: 16,
   },
   avatar: {
     backgroundColor: "#e2e8f0",
@@ -1260,5 +1356,94 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: "#374151",
+  },
+  deleteButton: {
+    padding: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#fef2f2",
+    borderLeftWidth: 1,
+    borderLeftColor: "#fecaca",
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    width: "100%",
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  modalHeader: {
+    padding: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#1e293b",
+    textAlign: "center",
+  },
+  modalBody: {
+    padding: 20,
+    paddingTop: 16,
+    paddingBottom: 16,
+  },
+  modalText: {
+    fontSize: 16,
+    color: "#64748b",
+    textAlign: "center",
+    lineHeight: 24,
+    marginBottom: 8,
+  },
+  modalUserName: {
+    fontWeight: "600",
+    color: "#1e293b",
+  },
+  modalSubtext: {
+    fontSize: 14,
+    color: "#94a3b8",
+    textAlign: "center",
+    fontStyle: "italic",
+  },
+  modalActions: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+  },
+  modalCancelButton: {
+    flex: 1,
+    padding: 16,
+    alignItems: "center",
+    borderRightWidth: 1,
+    borderRightColor: "#f1f5f9",
+  },
+  modalCancelText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#64748b",
+  },
+  modalDeleteButton: {
+    flex: 1,
+    padding: 16,
+    alignItems: "center",
+    backgroundColor: "#fef2f2",
+  },
+  modalDeleteText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#ef4444",
   },
 })
