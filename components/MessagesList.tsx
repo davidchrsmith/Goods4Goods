@@ -120,14 +120,119 @@ export default function MessagesList({
     try {
       setLoading(true)
 
-      // Get conversations where user is participant
+      // Get conversations where user is participant, excluding ones hidden by this user
       const { data: conversationsData, error: conversationsError } = await supabase
         .from("conversations")
-        .select("*")
+        .select(`
+          *,
+          hidden_conversations!left(user_id)
+        `)
         .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
+        .is("hidden_conversations.user_id", null) // Exclude conversations hidden by current user
         .order("last_message_at", { ascending: false })
 
-      if (conversationsError) throw conversationsError
+      if (conversationsError) {
+        console.log("Error with join query, falling back to simple query:", conversationsError)
+
+        // Fallback to simple query and filter manually
+        const { data: allConversations, error: simpleError } = await supabase
+          .from("conversations")
+          .select("*")
+          .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
+          .order("last_message_at", { ascending: false })
+
+        if (simpleError) throw simpleError
+
+        // Get hidden conversations for current user to filter out
+        const { data: hiddenConversations } = await supabase
+          .from("hidden_conversations")
+          .select("conversation_id")
+          .eq("user_id", session.user.id)
+
+        const hiddenConversationIds = new Set(hiddenConversations?.map((h) => h.conversation_id) || [])
+
+        // Filter out hidden conversations
+        const filteredConversations = allConversations?.filter((conv) => !hiddenConversationIds.has(conv.id)) || []
+
+        if (filteredConversations.length === 0) {
+          setConversations([])
+          return
+        }
+
+        // Continue with filtered conversations
+        const conversationsWithDetails = await Promise.all(
+          filteredConversations.map(async (conversation) => {
+            const otherUserId =
+              conversation.user1_id === session.user.id ? conversation.user2_id : conversation.user1_id
+
+            // Get other user's profile
+            const { data: profile } = await supabase.from("profiles").select("*").eq("id", otherUserId).single()
+
+            // Get last message - handle 406 errors gracefully
+            let lastMessage = null
+            try {
+              const { data: lastMessageData, error: lastMessageError } = await supabase
+                .from("messages")
+                .select("*")
+                .eq("conversation_id", conversation.id)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (lastMessageError && lastMessageError.code !== "PGRST116") {
+                console.warn(`Error fetching last message for conversation ${conversation.id}:`, lastMessageError)
+              } else {
+                lastMessage = lastMessageData
+              }
+            } catch (error) {
+              console.warn(`Failed to fetch last message for conversation ${conversation.id}:`, error)
+            }
+
+            // Get unread count with better error handling
+            let unreadCount = 0
+            try {
+              const { data: unreadMessages, error: unreadError } = await supabase
+                .from("messages")
+                .select("id")
+                .eq("conversation_id", conversation.id)
+                .eq("is_read", false)
+                .neq("sender_id", session.user.id)
+
+              if (unreadError) {
+                console.error("Error fetching unread messages for conversation", conversation.id, unreadError)
+              } else {
+                unreadCount = unreadMessages?.length || 0
+              }
+            } catch (error) {
+              console.warn(`Failed to get unread count for conversation ${conversation.id}:`, error)
+            }
+
+            console.log(`Conversation ${conversation.id}: unread count = ${unreadCount}`)
+
+            return {
+              ...conversation,
+              other_user: profile || {
+                id: otherUserId,
+                full_name: "Unknown User",
+                username: null,
+                phone: null,
+                avatar_url: null,
+                latitude: null,
+                longitude: null,
+                location_name: null,
+                location_updated_at: null,
+                created_at: "",
+                updated_at: "",
+              },
+              last_message: lastMessage,
+              unread_count: unreadCount,
+            }
+          }),
+        )
+
+        setConversations(conversationsWithDetails)
+        return
+      }
 
       if (!conversationsData || conversationsData.length === 0) {
         setConversations([])
@@ -467,6 +572,12 @@ export default function MessagesList({
       }
 
       if (existingConversation) {
+        // If conversation exists but was hidden by current user, unhide it
+        await supabase.rpc("unhide_conversation_for_user", {
+          conversation_id: existingConversation.id,
+          user_id: session.user.id,
+        })
+
         return existingConversation.id
       }
 
@@ -579,43 +690,36 @@ export default function MessagesList({
     }
   }
 
-  async function deleteConversation(conversationId: string) {
+  async function hideConversation(conversationId: string) {
     try {
       setDeleting(true)
-      console.log(`=== DELETING CONVERSATION ===`)
+      console.log(`=== HIDING CONVERSATION FOR USER ===`)
       console.log(`Conversation ID: ${conversationId}`)
+      console.log(`User ID: ${session.user.id}`)
 
-      // First, delete all messages in the conversation
-      const { error: messagesError } = await supabase.from("messages").delete().eq("conversation_id", conversationId)
+      // Use the new RPC function that hides conversation for this user only
+      const { data, error } = await supabase.rpc("hide_conversation_for_user", {
+        p_conversation_id: conversationId,
+        p_user_id: session.user.id,
+      })
 
-      if (messagesError) {
-        console.error("Error deleting messages:", messagesError)
-        throw messagesError
+      if (error) {
+        console.error("Error hiding conversation:", error)
+        throw error
       }
 
-      // Then delete the conversation itself
-      const { error: conversationError } = await supabase
-        .from("conversations")
-        .delete()
-        .eq("id", conversationId)
-        .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
-
-      if (conversationError) {
-        console.error("Error deleting conversation:", conversationError)
-        throw conversationError
-      }
+      console.log("Conversation hidden successfully for current user")
 
       // Update local state immediately
       setConversations((prev) => prev.filter((conv) => conv.id !== conversationId))
 
-      console.log("Conversation deleted successfully")
       setShowDeleteModal(false)
       setConversationToDelete(null)
     } catch (error) {
-      console.error("Error deleting conversation:", error)
+      console.error("Error hiding conversation:", error)
       // For web compatibility, we'll use a simple alert fallback
       if (typeof window !== "undefined" && window.alert) {
-        window.alert("Failed to delete conversation. Please try again.")
+        window.alert("Failed to hide conversation. Please try again.")
       }
     } finally {
       setDeleting(false)
@@ -623,14 +727,14 @@ export default function MessagesList({
   }
 
   const handleDeleteConversation = (conversation: ConversationWithDetails) => {
-    console.log("Delete button clicked for conversation:", conversation.id)
+    console.log("Hide button clicked for conversation:", conversation.id)
     setConversationToDelete(conversation)
     setShowDeleteModal(true)
   }
 
   const confirmDelete = () => {
     if (conversationToDelete) {
-      deleteConversation(conversationToDelete.id)
+      hideConversation(conversationToDelete.id)
     }
   }
 
@@ -1032,20 +1136,23 @@ export default function MessagesList({
         )}
       </ScrollView>
 
-      {/* Delete Confirmation Modal */}
+      {/* Hide Confirmation Modal */}
       <Modal visible={showDeleteModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Delete Conversation</Text>
+              <Text style={styles.modalTitle}>Hide Conversation</Text>
             </View>
 
             <View style={styles.modalBody}>
               <Text style={styles.modalText}>
-                Are you sure you want to delete your conversation with{" "}
+                Are you sure you want to hide your conversation with{" "}
                 <Text style={styles.modalUserName}>{conversationToDelete?.other_user.full_name || "this user"}</Text>?
               </Text>
-              <Text style={styles.modalSubtext}>This action cannot be undone.</Text>
+              <Text style={styles.modalSubtext}>
+                This will only hide it for you. {conversationToDelete?.other_user.full_name || "The other user"} will
+                still be able to see the conversation and send you messages.
+              </Text>
             </View>
 
             <View style={styles.modalActions}>
@@ -1054,7 +1161,7 @@ export default function MessagesList({
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.modalDeleteButton} onPress={confirmDelete} disabled={deleting}>
-                <Text style={styles.modalDeleteText}>{deleting ? "Deleting..." : "Delete"}</Text>
+                <Text style={styles.modalDeleteText}>{deleting ? "Hiding..." : "Hide"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1406,7 +1513,7 @@ const styles = StyleSheet.create({
     color: "#64748b",
     textAlign: "center",
     lineHeight: 24,
-    marginBottom: 8,
+    marginBottom: 12,
   },
   modalUserName: {
     fontWeight: "600",
@@ -1416,7 +1523,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#94a3b8",
     textAlign: "center",
-    fontStyle: "italic",
+    lineHeight: 20,
   },
   modalActions: {
     flexDirection: "row",
