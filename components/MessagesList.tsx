@@ -119,129 +119,61 @@ export default function MessagesList({
   async function loadConversations() {
     try {
       setLoading(true)
+      console.log("=== LOADING CONVERSATIONS ===")
+      console.log("Current user ID:", session.user.id)
 
-      // Get conversations where user is participant, excluding ones hidden by this user
-      const { data: conversationsData, error: conversationsError } = await supabase
+      // First, get all conversations where user is a participant
+      const { data: allConversations, error: conversationsError } = await supabase
         .from("conversations")
-        .select(`
-          *,
-          hidden_conversations!left(user_id)
-        `)
+        .select("*")
         .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
-        .is("hidden_conversations.user_id", null) // Exclude conversations hidden by current user
         .order("last_message_at", { ascending: false })
 
       if (conversationsError) {
-        console.log("Error with join query, falling back to simple query:", conversationsError)
-
-        // Fallback to simple query and filter manually
-        const { data: allConversations, error: simpleError } = await supabase
-          .from("conversations")
-          .select("*")
-          .or(`user1_id.eq.${session.user.id},user2_id.eq.${session.user.id}`)
-          .order("last_message_at", { ascending: false })
-
-        if (simpleError) throw simpleError
-
-        // Get hidden conversations for current user to filter out
-        const { data: hiddenConversations } = await supabase
-          .from("hidden_conversations")
-          .select("conversation_id")
-          .eq("user_id", session.user.id)
-
-        const hiddenConversationIds = new Set(hiddenConversations?.map((h) => h.conversation_id) || [])
-
-        // Filter out hidden conversations
-        const filteredConversations = allConversations?.filter((conv) => !hiddenConversationIds.has(conv.id)) || []
-
-        if (filteredConversations.length === 0) {
-          setConversations([])
-          return
-        }
-
-        // Continue with filtered conversations
-        const conversationsWithDetails = await Promise.all(
-          filteredConversations.map(async (conversation) => {
-            const otherUserId =
-              conversation.user1_id === session.user.id ? conversation.user2_id : conversation.user1_id
-
-            // Get other user's profile
-            const { data: profile } = await supabase.from("profiles").select("*").eq("id", otherUserId).single()
-
-            // Get last message - handle 406 errors gracefully
-            let lastMessage = null
-            try {
-              const { data: lastMessageData, error: lastMessageError } = await supabase
-                .from("messages")
-                .select("*")
-                .eq("conversation_id", conversation.id)
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle()
-
-              if (lastMessageError && lastMessageError.code !== "PGRST116") {
-                console.warn(`Error fetching last message for conversation ${conversation.id}:`, lastMessageError)
-              } else {
-                lastMessage = lastMessageData
-              }
-            } catch (error) {
-              console.warn(`Failed to fetch last message for conversation ${conversation.id}:`, error)
-            }
-
-            // Get unread count with better error handling
-            let unreadCount = 0
-            try {
-              const { data: unreadMessages, error: unreadError } = await supabase
-                .from("messages")
-                .select("id")
-                .eq("conversation_id", conversation.id)
-                .eq("is_read", false)
-                .neq("sender_id", session.user.id)
-
-              if (unreadError) {
-                console.error("Error fetching unread messages for conversation", conversation.id, unreadError)
-              } else {
-                unreadCount = unreadMessages?.length || 0
-              }
-            } catch (error) {
-              console.warn(`Failed to get unread count for conversation ${conversation.id}:`, error)
-            }
-
-            console.log(`Conversation ${conversation.id}: unread count = ${unreadCount}`)
-
-            return {
-              ...conversation,
-              other_user: profile || {
-                id: otherUserId,
-                full_name: "Unknown User",
-                username: null,
-                phone: null,
-                avatar_url: null,
-                latitude: null,
-                longitude: null,
-                location_name: null,
-                location_updated_at: null,
-                created_at: "",
-                updated_at: "",
-              },
-              last_message: lastMessage,
-              unread_count: unreadCount,
-            }
-          }),
-        )
-
-        setConversations(conversationsWithDetails)
-        return
+        console.error("Error loading conversations:", conversationsError)
+        throw conversationsError
       }
 
-      if (!conversationsData || conversationsData.length === 0) {
+      console.log(`Found ${allConversations?.length || 0} total conversations`)
+
+      // Get hidden conversations for current user
+      const { data: hiddenConversations, error: hiddenError } = await supabase
+        .from("hidden_conversations")
+        .select("conversation_id")
+        .eq("user_id", session.user.id)
+
+      if (hiddenError) {
+        console.error("Error loading hidden conversations:", hiddenError)
+        // Continue anyway, just don't filter
+      }
+
+      const hiddenConversationIds = new Set(hiddenConversations?.map((h) => h.conversation_id) || [])
+      console.log(
+        `Found ${hiddenConversationIds.size} hidden conversations for current user:`,
+        Array.from(hiddenConversationIds),
+      )
+
+      // Filter out hidden conversations
+      const filteredConversations =
+        allConversations?.filter((conv) => {
+          const isHidden = hiddenConversationIds.has(conv.id)
+          if (isHidden) {
+            console.log(`Filtering out hidden conversation: ${conv.id}`)
+          }
+          return !isHidden
+        }) || []
+
+      console.log(`After filtering: ${filteredConversations.length} visible conversations`)
+
+      if (filteredConversations.length === 0) {
         setConversations([])
+        setLoading(false)
         return
       }
 
       // Get other user profiles and last messages for each conversation
       const conversationsWithDetails = await Promise.all(
-        conversationsData.map(async (conversation) => {
+        filteredConversations.map(async (conversation) => {
           const otherUserId = conversation.user1_id === session.user.id ? conversation.user2_id : conversation.user1_id
 
           // Get other user's profile
@@ -256,7 +188,7 @@ export default function MessagesList({
               .eq("conversation_id", conversation.id)
               .order("created_at", { ascending: false })
               .limit(1)
-              .maybeSingle() // Use maybeSingle() instead of single() to handle no results
+              .maybeSingle()
 
             if (lastMessageError && lastMessageError.code !== "PGRST116") {
               console.warn(`Error fetching last message for conversation ${conversation.id}:`, lastMessageError)
@@ -286,8 +218,6 @@ export default function MessagesList({
             console.warn(`Failed to get unread count for conversation ${conversation.id}:`, error)
           }
 
-          console.log(`Conversation ${conversation.id}: unread count = ${unreadCount}`)
-
           return {
             ...conversation,
             other_user: profile || {
@@ -309,6 +239,7 @@ export default function MessagesList({
         }),
       )
 
+      console.log(`Setting ${conversationsWithDetails.length} conversations in state`)
       setConversations(conversationsWithDetails)
     } catch (error) {
       console.error("Error loading conversations:", error)
@@ -574,8 +505,8 @@ export default function MessagesList({
       if (existingConversation) {
         // If conversation exists but was hidden by current user, unhide it
         await supabase.rpc("unhide_conversation_for_user", {
-          conversation_id: existingConversation.id,
-          user_id: session.user.id,
+          p_conversation_id: existingConversation.id,
+          p_user_id: session.user.id,
         })
 
         return existingConversation.id
@@ -697,7 +628,7 @@ export default function MessagesList({
       console.log(`Conversation ID: ${conversationId}`)
       console.log(`User ID: ${session.user.id}`)
 
-      // Use the new RPC function that hides conversation for this user only
+      // Use the RPC function to hide the conversation
       const { data, error } = await supabase.rpc("hide_conversation_for_user", {
         p_conversation_id: conversationId,
         p_user_id: session.user.id,
@@ -708,13 +639,31 @@ export default function MessagesList({
         throw error
       }
 
+      console.log("RPC function returned:", data)
       console.log("Conversation hidden successfully for current user")
+
+      // Verify the hide was successful by checking the database
+      const { data: verifyData, error: verifyError } = await supabase
+        .from("hidden_conversations")
+        .select("*")
+        .eq("conversation_id", conversationId)
+        .eq("user_id", session.user.id)
+        .single()
+
+      if (verifyError) {
+        console.error("Error verifying hidden conversation:", verifyError)
+      } else {
+        console.log("Verified hidden conversation in database:", verifyData)
+      }
 
       // Update local state immediately
       setConversations((prev) => prev.filter((conv) => conv.id !== conversationId))
 
       setShowDeleteModal(false)
       setConversationToDelete(null)
+
+      // Reload conversations to ensure consistency
+      await loadConversations()
     } catch (error) {
       console.error("Error hiding conversation:", error)
       // For web compatibility, we'll use a simple alert fallback
