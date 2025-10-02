@@ -20,7 +20,7 @@ interface ItemWithProfile extends Item {
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get("window")
 const CARD_WIDTH = screenWidth * 0.9
-const CARD_HEIGHT = screenHeight * 0.7
+const CARD_HEIGHT = screenHeight * 0.6
 
 export default function SwipeCards({ session }: SwipeCardsProps) {
   const [items, setItems] = useState<ItemWithProfile[]>([])
@@ -493,11 +493,11 @@ export default function SwipeCards({ session }: SwipeCardsProps) {
 
       <View style={styles.actions}>
         <TouchableOpacity style={[styles.actionButton, styles.passButton]} onPress={() => handleSwipe("left")}>
-          <Text style={styles.passButtonText}>Pass</Text>
+          <Feather name="x" size={32} color="white" />
         </TouchableOpacity>
 
         <TouchableOpacity style={[styles.actionButton, styles.tradeButton]} onPress={() => handleSwipe("right")}>
-          <Text style={styles.tradeButtonText}>Trade</Text>
+          <Feather name="heart" size={32} color="white" />
         </TouchableOpacity>
       </View>
 
@@ -637,8 +637,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    padding: 20,
+    paddingHorizontal: 20,
     paddingTop: 60,
+    paddingBottom: 16,
+    backgroundColor: "white",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+    position: "relative",
+    zIndex: 10,
   },
   title: {
     fontSize: 24,
@@ -652,6 +658,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    paddingVertical: 20,
   },
   card: {
     width: CARD_WIDTH,
@@ -730,21 +737,23 @@ const styles = StyleSheet.create({
   },
   actions: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    paddingHorizontal: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 40,
     paddingBottom: 40,
+    paddingTop: 20,
   },
   actionButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
     justifyContent: "center",
     alignItems: "center",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
-    elevation: 4,
+    elevation: 5,
   },
   passButton: {
     backgroundColor: "#ef4444",
