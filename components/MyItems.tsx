@@ -15,13 +15,6 @@ export default function MyItems({ session }: MyItemsProps) {
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<"available" | "unavailable" | "traded">("available")
-  const [debugInfo, setDebugInfo] = useState<string[]>([])
-
-  // Add debug logging function
-  const addDebugLog = (message: string) => {
-    console.log(message)
-    setDebugInfo((prev) => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`])
-  }
 
   useEffect(() => {
     loadMyItems()
@@ -30,7 +23,6 @@ export default function MyItems({ session }: MyItemsProps) {
   async function loadMyItems() {
     try {
       setLoading(true)
-      addDebugLog("Loading items...")
 
       const { data, error } = await supabase
         .from("items")
@@ -41,10 +33,8 @@ export default function MyItems({ session }: MyItemsProps) {
       if (error) throw error
 
       setItems(data || [])
-      addDebugLog(`Loaded ${data?.length || 0} items`)
     } catch (error) {
       console.error("Error loading items:", error)
-      addDebugLog(`Error loading items: ${error.message}`)
       Alert.alert("Error", "Failed to load your items")
     } finally {
       setLoading(false)
@@ -52,17 +42,10 @@ export default function MyItems({ session }: MyItemsProps) {
   }
 
   async function toggleItemAvailability(itemId: string, currentAvailability: boolean) {
-    addDebugLog(`toggleItemAvailability called for item ${itemId.substring(0, 8)}`)
-
     try {
       const action = currentAvailability ? "take down" : "repost"
       const newAvailability = !currentAvailability
       const newStatus = newAvailability ? "available" : "unavailable"
-
-      addDebugLog(`Action: ${action}, New availability: ${newAvailability}, New status: ${newStatus}`)
-
-      // Proceed directly without confirmation
-      addDebugLog("Proceeding with Supabase update...")
 
       // Delete associated trade requests first
       const { error: tradeRequestError } = await supabase
@@ -71,10 +54,7 @@ export default function MyItems({ session }: MyItemsProps) {
         .or(`requester_item_id.eq.${itemId},target_item_id.eq.${itemId}`)
 
       if (tradeRequestError) {
-        addDebugLog(`Trade request cleanup error: ${tradeRequestError.message}`)
         // Continue anyway - this is not critical
-      } else {
-        addDebugLog("Trade requests cleaned up successfully")
       }
 
       const { data, error } = await supabase
@@ -88,21 +68,16 @@ export default function MyItems({ session }: MyItemsProps) {
         .eq("user_id", session.user.id)
         .select()
 
-      addDebugLog(`Supabase result: ${error ? "ERROR" : "SUCCESS"}`)
-
       if (error) {
-        addDebugLog(`Database error: ${error.message}`)
         Alert.alert("Database Error", `Failed to ${action} item: ${error.message}`)
         return
       }
 
       if (!data || data.length === 0) {
-        addDebugLog("No rows updated - permission issue?")
         Alert.alert("Error", "Item not found or you don't have permission to modify it")
         return
       }
 
-      addDebugLog(`Item ${action} successful! Updated ${data.length} rows`)
       Alert.alert("Success", `Item ${action} successful!`)
 
       // Update local state
@@ -119,22 +94,15 @@ export default function MyItems({ session }: MyItemsProps) {
         ),
       )
 
-      addDebugLog("Local state updated")
-
       // Reload items
       loadMyItems()
     } catch (error) {
-      addDebugLog(`Function error: ${error.message}`)
       Alert.alert("Error", `Function error: ${error.message}`)
     }
   }
 
   async function deleteItem(itemId: string, imageUrls: string[]) {
-    addDebugLog(`deleteItem called for item ${itemId.substring(0, 8)}`)
-
     try {
-      addDebugLog("Proceeding with deletion...")
-
       // Delete associated trade requests first
       const { error: tradeRequestError } = await supabase
         .from("trade_requests")
@@ -142,10 +110,7 @@ export default function MyItems({ session }: MyItemsProps) {
         .or(`requester_item_id.eq.${itemId},target_item_id.eq.${itemId}`)
 
       if (tradeRequestError) {
-        addDebugLog(`Trade request cleanup error: ${tradeRequestError.message}`)
         // Continue anyway - this is not critical
-      } else {
-        addDebugLog("Trade requests cleaned up successfully")
       }
 
       const { data, error } = await supabase
@@ -155,27 +120,20 @@ export default function MyItems({ session }: MyItemsProps) {
         .eq("user_id", session.user.id)
         .select()
 
-      addDebugLog(`Delete result: ${error ? "ERROR" : "SUCCESS"}`)
-
       if (error) {
-        addDebugLog(`Delete error: ${error.message}`)
         Alert.alert("Database Error", `Failed to delete item: ${error.message}`)
         return
       }
 
       if (!data || data.length === 0) {
-        addDebugLog("No rows deleted - permission issue?")
         Alert.alert("Error", "Item not found or you don't have permission to delete it")
         return
       }
 
-      addDebugLog(`Item deleted successfully! Deleted ${data.length} rows`)
       Alert.alert("Success", "Item deleted successfully!")
 
       // Update local state
       setItems((prevItems) => prevItems.filter((item) => item.id !== itemId))
-
-      addDebugLog("Local state updated")
 
       // Try to delete images from storage
       if (imageUrls && imageUrls.length > 0) {
@@ -188,22 +146,16 @@ export default function MyItems({ session }: MyItemsProps) {
             .filter(Boolean) as string[]
 
           if (filePaths.length > 0) {
-            const { error: storageError } = await supabase.storage.from("item-images").remove(filePaths)
-            if (storageError) {
-              addDebugLog(`Image cleanup error: ${storageError.message}`)
-            } else {
-              addDebugLog("Images deleted successfully")
-            }
+            await supabase.storage.from("item-images").remove(filePaths)
           }
         } catch (imageError) {
-          addDebugLog(`Error processing images: ${imageError.message}`)
+          // Silent fail for image cleanup
         }
       }
 
       // Reload items
       loadMyItems()
     } catch (error) {
-      addDebugLog(`Delete error: ${error.message}`)
       Alert.alert("Error", `Unexpected error: ${error.message}`)
     }
   }
@@ -261,10 +213,7 @@ export default function MyItems({ session }: MyItemsProps) {
               activeTab === "available" && styles.activeTab,
               pressed && styles.tabPressed,
             ]}
-            onPress={() => {
-              addDebugLog("Available tab pressed")
-              setActiveTab("available")
-            }}
+            onPress={() => setActiveTab("available")}
           >
             <Text style={[styles.tabText, activeTab === "available" && styles.activeTabText]}>
               Available ({items.filter((item) => item.status === "available").length})
@@ -276,10 +225,7 @@ export default function MyItems({ session }: MyItemsProps) {
               activeTab === "unavailable" && styles.activeTab,
               pressed && styles.tabPressed,
             ]}
-            onPress={() => {
-              addDebugLog("Unavailable tab pressed")
-              setActiveTab("unavailable")
-            }}
+            onPress={() => setActiveTab("unavailable")}
           >
             <Text style={[styles.tabText, activeTab === "unavailable" && styles.activeTabText]}>
               Taken Down ({items.filter((item) => item.status === "unavailable").length})
@@ -291,26 +237,13 @@ export default function MyItems({ session }: MyItemsProps) {
               activeTab === "traded" && styles.activeTab,
               pressed && styles.tabPressed,
             ]}
-            onPress={() => {
-              addDebugLog("Traded tab pressed")
-              setActiveTab("traded")
-            }}
+            onPress={() => setActiveTab("traded")}
           >
             <Text style={[styles.tabText, activeTab === "traded" && styles.activeTabText]}>
               Traded ({items.filter((item) => item.status === "traded").length})
             </Text>
           </Pressable>
         </View>
-      </View>
-
-      {/* Debug info panel */}
-      <View style={styles.debugPanel}>
-        <Text style={styles.debugTitle}>Debug Log:</Text>
-        {debugInfo.map((log, index) => (
-          <Text key={index} style={styles.debugText}>
-            {log}
-          </Text>
-        ))}
       </View>
 
       <ScrollView style={styles.content}>
@@ -363,10 +296,7 @@ export default function MyItems({ session }: MyItemsProps) {
                         styles.deleteButton,
                         pressed && styles.buttonPressed,
                       ]}
-                      onPress={() => {
-                        addDebugLog(`Delete button pressed for traded item ${item.title}`)
-                        deleteItem(item.id, item.image_urls)
-                      }}
+                      onPress={() => deleteItem(item.id, item.image_urls)}
                     >
                       <Text style={styles.deleteButtonText}>Delete</Text>
                     </Pressable>
@@ -379,10 +309,7 @@ export default function MyItems({ session }: MyItemsProps) {
                         item.is_available ? styles.takeDownButton : styles.repostButton,
                         pressed && styles.buttonPressed,
                       ]}
-                      onPress={() => {
-                        addDebugLog(`${item.is_available ? "Take down" : "Repost"} button pressed for ${item.title}`)
-                        toggleItemAvailability(item.id, item.is_available)
-                      }}
+                      onPress={() => toggleItemAvailability(item.id, item.is_available)}
                     >
                       <Text
                         style={[
@@ -400,10 +327,7 @@ export default function MyItems({ session }: MyItemsProps) {
                         styles.deleteButton,
                         pressed && styles.buttonPressed,
                       ]}
-                      onPress={() => {
-                        addDebugLog(`Delete button pressed for ${item.title}`)
-                        deleteItem(item.id, item.image_urls)
-                      }}
+                      onPress={() => deleteItem(item.id, item.image_urls)}
                     >
                       <Text style={styles.deleteButtonText}>Delete</Text>
                     </Pressable>
@@ -498,24 +422,6 @@ const styles = StyleSheet.create({
   },
   activeTabText: {
     color: "#3b82f6",
-  },
-  debugPanel: {
-    backgroundColor: "#f1f5f9",
-    padding: 10,
-    margin: 10,
-    borderRadius: 8,
-    maxHeight: 120,
-  },
-  debugTitle: {
-    fontSize: 12,
-    fontWeight: "bold",
-    color: "#1e293b",
-    marginBottom: 4,
-  },
-  debugText: {
-    fontSize: 10,
-    color: "#64748b",
-    marginBottom: 2,
   },
   content: {
     flex: 1,
