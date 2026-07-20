@@ -8,6 +8,7 @@ interface AuthResponse {
 }
 
 export async function login(email: string, password: string): Promise<AuthResponse> {
+  await clearTokens()
   const data = await apiRequest<AuthResponse>("/auth/login/", {
     method: "POST",
     body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
@@ -17,6 +18,7 @@ export async function login(email: string, password: string): Promise<AuthRespon
 }
 
 export async function register(email: string, password: string): Promise<AuthResponse> {
+  await clearTokens()
   const data = await apiRequest<AuthResponse>("/auth/register/", {
     method: "POST",
     body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
