@@ -1,10 +1,8 @@
-"use client"
-
 import { useState } from "react"
 import * as Location from "expo-location"
 import { Alert } from "react-native"
-import { supabase } from "../lib/supabase"
-import type { Session } from "@supabase/supabase-js"
+import { updateProfile } from "../api/auth"
+import type { Profile } from "../api/types"
 
 interface LocationData {
   latitude: number
@@ -17,7 +15,7 @@ interface UseLocationReturn {
   loading: boolean
   error: string | null
   requestLocation: () => Promise<void>
-  updateUserLocation: (session: Session) => Promise<void>
+  updateUserLocation: (profile: Profile) => Promise<void>
 }
 
 export function useLocation(): UseLocationReturn {
@@ -26,51 +24,45 @@ export function useLocation(): UseLocationReturn {
   const [error, setError] = useState<string | null>(null)
 
   const requestLocation = async () => {
+    setLoading(true)
+    setError(null)
     try {
-      setLoading(true)
-      setError(null)
-
-      // Request permission
       const { status } = await Location.requestForegroundPermissionsAsync()
       if (status !== "granted") {
         setError("Location permission denied")
         Alert.alert(
           "Location Permission Required",
-          "Please enable location access to find items near you. You can change this in your device settings.",
+          "Please enable location access to find items near you.",
         )
         return
       }
 
-      // Get current location
-      const currentLocation = await Location.getCurrentPositionAsync({
+      const current = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       })
 
-      const locationData: LocationData = {
-        latitude: currentLocation.coords.latitude,
-        longitude: currentLocation.coords.longitude,
+      const data: LocationData = {
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude,
       }
 
-      // Try to get address name
       try {
         const [address] = await Location.reverseGeocodeAsync({
-          latitude: locationData.latitude,
-          longitude: locationData.longitude,
+          latitude: data.latitude,
+          longitude: data.longitude,
         })
-
         if (address) {
-          locationData.locationName = `${address.city || address.subregion || ""}, ${address.region || ""}`.trim()
-          if (locationData.locationName.startsWith(",")) {
-            locationData.locationName = locationData.locationName.substring(1).trim()
+          data.locationName = `${address.city || address.subregion || ""}, ${address.region || ""}`.trim()
+          if (data.locationName.startsWith(",")) {
+            data.locationName = data.locationName.substring(1).trim()
           }
         }
-      } catch (geocodeError) {
-        console.warn("Failed to get location name:", geocodeError)
+      } catch {
+        // Location name is optional; continue without it
       }
 
-      setLocation(locationData)
-    } catch (locationError) {
-      console.error("Error getting location:", locationError)
+      setLocation(data)
+    } catch {
       setError("Failed to get location")
       Alert.alert("Location Error", "Unable to get your current location. Please try again.")
     } finally {
@@ -78,34 +70,19 @@ export function useLocation(): UseLocationReturn {
     }
   }
 
-  const updateUserLocation = async (session: Session) => {
-    if (!location || !session?.user) return
-
+  const updateUserLocation = async (profile: Profile) => {
+    if (!location) return
     try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          latitude: location.latitude,
-          longitude: location.longitude,
-          location_name: location.locationName,
-          location_updated_at: new Date().toISOString(),
-        })
-        .eq("id", session.user.id)
-
-      if (error) throw error
-
-      console.log("User location updated successfully")
-    } catch (updateError) {
-      console.error("Error updating user location:", updateError)
-      Alert.alert("Error", "Failed to save your location")
+      await updateProfile({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        location_name: location.locationName,
+        location_updated_at: new Date().toISOString(),
+      })
+    } catch {
+      // Non-critical — silently fail
     }
   }
 
-  return {
-    location,
-    loading,
-    error,
-    requestLocation,
-    updateUserLocation,
-  }
+  return { location, loading, error, requestLocation, updateUserLocation }
 }

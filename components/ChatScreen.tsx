@@ -1,210 +1,117 @@
-"use client"
-
 import { useState, useEffect, useRef } from "react"
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  Alert, KeyboardAvoidingView, Platform,
 } from "react-native"
-import { supabase } from "../lib/supabase"
-import type { Session } from "@supabase/supabase-js"
-import type { Message, Profile } from "../types/database"
+import { getMessages, sendMessage, markConversationRead } from "../api/messages"
+import { ApiError } from "../api/client"
+import type { Message, Profile } from "../api/types"
 import { Input, Button, Avatar } from "@rneui/themed"
 import { Feather } from "@expo/vector-icons"
 
 interface ChatScreenProps {
-  session: Session
+  profile: Profile
   conversationId: string
   otherUser: Profile
   onBack: () => void
 }
 
-export default function ChatScreen({ session, conversationId, otherUser, onBack }: ChatScreenProps) {
+const POLL_INTERVAL = 3000
+
+export default function ChatScreen({ profile, conversationId, otherUser, onBack }: ChatScreenProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const scrollViewRef = useRef<ScrollView>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    const initializeChat = async () => {
-      await loadMessages()
-      await markMessagesAsRead()
-    }
-
-    initializeChat()
-
-    // Subscribe to real-time message updates with better filtering
-    const messagesSubscription = supabase
-      .channel(`messages-${conversationId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          console.log("New message received:", payload.new)
-          const newMessage = payload.new as Message
-          setMessages((prev) => {
-            // Avoid duplicates
-            if (prev.some((msg) => msg.id === newMessage.id)) {
-              return prev
-            }
-            return [...prev, newMessage]
-          })
-
-          // Mark as read if not sent by current user
-          if (newMessage.sender_id !== session.user.id) {
-            markMessageAsRead(newMessage.id)
-          }
-        },
-      )
-      .subscribe()
-
-    console.log("Subscribed to messages for conversation:", conversationId)
-
+    initChat()
+    pollRef.current = setInterval(pollMessages, POLL_INTERVAL)
     return () => {
-      console.log("Unsubscribing from messages")
-      messagesSubscription.unsubscribe()
+      if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [conversationId])
 
   useEffect(() => {
-    // Scroll to bottom when new messages arrive
     scrollViewRef.current?.scrollToEnd({ animated: true })
   }, [messages])
 
-  async function loadMessages() {
+  async function initChat() {
+    setLoading(true)
     try {
-      setLoading(true)
-
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true })
-
-      if (error) throw error
-
-      setMessages(data || [])
-    } catch (error) {
-      console.error("Error loading messages:", error)
+      const data = await getMessages(conversationId)
+      setMessages(data)
+      await markConversationRead(conversationId)
+    } catch {
       Alert.alert("Error", "Failed to load messages")
     } finally {
       setLoading(false)
     }
   }
 
-  async function markMessagesAsRead() {
+  async function pollMessages() {
     try {
-      const { error } = await supabase
-        .from("messages")
-        .update({ is_read: true })
-        .eq("conversation_id", conversationId)
-        .eq("is_read", false)
-        .neq("sender_id", session.user.id)
-
-      if (error) throw error
-
-      console.log("Messages marked as read for conversation:", conversationId)
-    } catch (error) {
-      console.error("Error marking messages as read:", error)
+      const data = await getMessages(conversationId)
+      setMessages((prev) => {
+        if (data.length !== prev.length) {
+          markConversationRead(conversationId).catch(() => {})
+          return data
+        }
+        return prev
+      })
+    } catch {
+      // Silently fail on poll errors
     }
   }
 
-  async function markMessageAsRead(messageId: string) {
-    try {
-      await supabase.from("messages").update({ is_read: true }).eq("id", messageId)
-    } catch (error) {
-      console.error("Error marking message as read:", error)
-    }
-  }
-
-  async function sendMessage() {
+  async function handleSendMessage() {
     if (!newMessage.trim() || sending) return
-
-    const messageContent = newMessage.trim()
+    const content = newMessage.trim()
     const tempId = `temp-${Date.now()}`
 
-    // Create temporary message for immediate UI update
     const tempMessage: Message = {
       id: tempId,
       conversation_id: conversationId,
-      sender_id: session.user.id,
-      content: messageContent,
+      sender_id: profile.id,
+      content,
       is_read: true,
       created_at: new Date().toISOString(),
     }
 
+    setSending(true)
+    setNewMessage("")
+    setMessages((prev) => [...prev, tempMessage])
+
     try {
-      setSending(true)
-      setNewMessage("")
-
-      // Add message to UI immediately
-      setMessages((prev) => [...prev, tempMessage])
-
-      const { data, error } = await supabase
-        .from("messages")
-        .insert([
-          {
-            conversation_id: conversationId,
-            sender_id: session.user.id,
-            content: messageContent,
-          },
-        ])
-        .select()
-        .single()
-
-      if (error) throw error
-
-      // Replace temp message with real message
-      setMessages((prev) => prev.map((msg) => (msg.id === tempId ? data : msg)))
-    } catch (error) {
-      console.error("Error sending message:", error)
-      // Remove temp message on error
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId))
-      setNewMessage(messageContent) // Restore message text
+      const real = await sendMessage(conversationId, content)
+      setMessages((prev) => prev.map((m) => (m.id === tempId ? real : m)))
+    } catch {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId))
+      setNewMessage(content)
       Alert.alert("Error", "Failed to send message")
     } finally {
       setSending(false)
     }
   }
 
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  }
+  const formatTime = (dateString: string) =>
+    new Date(dateString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString)
     const today = new Date()
     const yesterday = new Date(today)
     yesterday.setDate(yesterday.getDate() - 1)
-
-    if (date.toDateString() === today.toDateString()) {
-      return "Today"
-    } else if (date.toDateString() === yesterday.toDateString()) {
-      return "Yesterday"
-    } else {
-      return date.toLocaleDateString()
-    }
+    if (date.toDateString() === today.toDateString()) return "Today"
+    if (date.toDateString() === yesterday.toDateString()) return "Yesterday"
+    return date.toLocaleDateString()
   }
 
-  const shouldShowDateSeparator = (currentMessage: Message, previousMessage: Message | null) => {
-    if (!previousMessage) return true
-
-    const currentDate = new Date(currentMessage.created_at).toDateString()
-    const previousDate = new Date(previousMessage.created_at).toDateString()
-
-    return currentDate !== previousDate
+  const shouldShowDateSeparator = (current: Message, previous: Message | null) => {
+    if (!previous) return true
+    return new Date(current.created_at).toDateString() !== new Date(previous.created_at).toDateString()
   }
 
   if (loading) {
@@ -217,12 +124,10 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
           <Feather name="arrow-left" size={24} color="#1e293b" />
         </TouchableOpacity>
-
         <View style={styles.headerContent}>
           <Avatar
             size={40}
@@ -235,34 +140,27 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
         </View>
       </View>
 
-      {/* Messages */}
-      <ScrollView ref={scrollViewRef} style={styles.messagesContainer} contentContainerStyle={styles.messagesContent}>
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.messagesContainer}
+        contentContainerStyle={styles.messagesContent}
+      >
         {messages.map((message, index) => {
-          const previousMessage = index > 0 ? messages[index - 1] : null
-          const isOwnMessage = message.sender_id === session.user.id
-          const showDateSeparator = shouldShowDateSeparator(message, previousMessage)
-
+          const previous = index > 0 ? messages[index - 1] : null
+          const isOwn = message.sender_id === profile.id
           return (
             <View key={message.id}>
-              {showDateSeparator && (
+              {shouldShowDateSeparator(message, previous) && (
                 <View style={styles.dateSeparator}>
                   <Text style={styles.dateSeparatorText}>{formatDate(message.created_at)}</Text>
                 </View>
               )}
-
-              <View
-                style={[
-                  styles.messageContainer,
-                  isOwnMessage ? styles.ownMessageContainer : styles.otherMessageContainer,
-                ]}
-              >
-                <View
-                  style={[styles.messageBubble, isOwnMessage ? styles.ownMessageBubble : styles.otherMessageBubble]}
-                >
-                  <Text style={[styles.messageText, isOwnMessage ? styles.ownMessageText : styles.otherMessageText]}>
+              <View style={[styles.messageContainer, isOwn ? styles.ownMessageContainer : styles.otherMessageContainer]}>
+                <View style={[styles.messageBubble, isOwn ? styles.ownMessageBubble : styles.otherMessageBubble]}>
+                  <Text style={[styles.messageText, isOwn ? styles.ownMessageText : styles.otherMessageText]}>
                     {message.content}
                   </Text>
-                  <Text style={[styles.messageTime, isOwnMessage ? styles.ownMessageTime : styles.otherMessageTime]}>
+                  <Text style={[styles.messageTime, isOwn ? styles.ownMessageTime : styles.otherMessageTime]}>
                     {formatTime(message.created_at)}
                   </Text>
                 </View>
@@ -272,7 +170,6 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
         })}
       </ScrollView>
 
-      {/* Message Input */}
       <View style={styles.inputContainer}>
         <Input
           value={newMessage}
@@ -285,7 +182,7 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
           inputStyle={styles.inputText}
         />
         <Button
-          onPress={sendMessage}
+          onPress={handleSendMessage}
           disabled={!newMessage.trim() || sending}
           buttonStyle={[styles.sendButton, (!newMessage.trim() || sending) && styles.sendButtonDisabled]}
           icon={<Feather name="send" size={20} color={!newMessage.trim() || sending ? "#94a3b8" : "white"} />}
@@ -296,145 +193,34 @@ export default function ChatScreen({ session, conversationId, otherUser, onBack 
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#f8fafc",
-  },
-  loadingText: {
-    fontSize: 18,
-    color: "#64748b",
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 16,
-    paddingTop: 60,
-    backgroundColor: "white",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e2e8f0",
-  },
-  backButton: {
-    marginRight: 16,
-  },
-  headerContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-  },
-  headerAvatar: {
-    backgroundColor: "#e2e8f0",
-    marginRight: 12,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#1e293b",
-  },
-  messagesContainer: {
-    flex: 1,
-  },
-  messagesContent: {
-    padding: 16,
-  },
-  dateSeparator: {
-    alignItems: "center",
-    marginVertical: 16,
-  },
-  dateSeparatorText: {
-    fontSize: 12,
-    color: "#94a3b8",
-    backgroundColor: "#f1f5f9",
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  messageContainer: {
-    marginVertical: 4,
-  },
-  ownMessageContainer: {
-    alignItems: "flex-end",
-  },
-  otherMessageContainer: {
-    alignItems: "flex-start",
-  },
-  messageBubble: {
-    maxWidth: "80%",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 20,
-  },
-  ownMessageBubble: {
-    backgroundColor: "#3b82f6",
-    borderBottomRightRadius: 4,
-  },
-  otherMessageBubble: {
-    backgroundColor: "white",
-    borderBottomLeftRadius: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  messageText: {
-    fontSize: 16,
-    lineHeight: 20,
-  },
-  ownMessageText: {
-    color: "white",
-  },
-  otherMessageText: {
-    color: "#1e293b",
-  },
-  messageTime: {
-    fontSize: 11,
-    marginTop: 4,
-  },
-  ownMessageTime: {
-    color: "rgba(255, 255, 255, 0.7)",
-  },
-  otherMessageTime: {
-    color: "#94a3b8",
-  },
-  inputContainer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    padding: 16,
-    backgroundColor: "white",
-    borderTopWidth: 1,
-    borderTopColor: "#e2e8f0",
-  },
-  inputWrapper: {
-    flex: 1,
-    marginBottom: 0,
-  },
-  inputField: {
-    borderBottomWidth: 0,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    maxHeight: 100,
-  },
-  inputText: {
-    fontSize: 16,
-    color: "#1e293b",
-  },
-  sendButton: {
-    backgroundColor: "#3b82f6",
-    borderRadius: 20,
-    width: 40,
-    height: 40,
-    marginLeft: 8,
-    marginBottom: 8,
-  },
-  sendButtonDisabled: {
-    backgroundColor: "#e2e8f0",
-  },
+  container: { flex: 1, backgroundColor: "#f8fafc" },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { fontSize: 16, color: "#64748b" },
+  header: { flexDirection: "row", alignItems: "center", paddingTop: 60, paddingBottom: 16, paddingHorizontal: 16, backgroundColor: "white", borderBottomWidth: 1, borderBottomColor: "#e2e8f0" },
+  backButton: { padding: 8, marginRight: 8 },
+  headerContent: { flexDirection: "row", alignItems: "center", flex: 1 },
+  headerAvatar: { marginRight: 12 },
+  headerTitle: { fontSize: 18, fontWeight: "600", color: "#1e293b" },
+  messagesContainer: { flex: 1 },
+  messagesContent: { padding: 16, paddingBottom: 8 },
+  dateSeparator: { alignItems: "center", marginVertical: 12 },
+  dateSeparatorText: { fontSize: 12, color: "#94a3b8", backgroundColor: "#f1f5f9", paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  messageContainer: { marginBottom: 8 },
+  ownMessageContainer: { alignItems: "flex-end" },
+  otherMessageContainer: { alignItems: "flex-start" },
+  messageBubble: { maxWidth: "75%", borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
+  ownMessageBubble: { backgroundColor: "#3b82f6", borderBottomRightRadius: 4 },
+  otherMessageBubble: { backgroundColor: "white", borderBottomLeftRadius: 4, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 },
+  messageText: { fontSize: 15, lineHeight: 20 },
+  ownMessageText: { color: "white" },
+  otherMessageText: { color: "#1e293b" },
+  messageTime: { fontSize: 11, marginTop: 4 },
+  ownMessageTime: { color: "rgba(255,255,255,0.7)", textAlign: "right" },
+  otherMessageTime: { color: "#94a3b8" },
+  inputContainer: { flexDirection: "row", alignItems: "flex-end", padding: 12, backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#e2e8f0" },
+  inputWrapper: { flex: 1, paddingHorizontal: 0 },
+  inputField: { borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 24, paddingHorizontal: 16, backgroundColor: "#f8fafc" },
+  inputText: { fontSize: 15, maxHeight: 100 },
+  sendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: "#3b82f6", marginLeft: 8, padding: 0 },
+  sendButtonDisabled: { backgroundColor: "#e2e8f0" },
 })

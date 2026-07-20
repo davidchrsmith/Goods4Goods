@@ -1,3 +1,21 @@
+// Re-export shared types from the API layer.
+// Import from "../api/types" in new code; this file is kept for backward compatibility.
+export type {
+  Profile,
+  Item,
+  TradeRequest,
+  TradeRequestWithDetails,
+  Conversation,
+  ConversationWithDetails,
+  Message,
+  Friendship,
+  FriendRequestWithProfile,
+} from "../api/types"
+
+// ---------------------------------------------------------------------------
+// Legacy Supabase Database type — kept so existing imports don't break while
+// the migration is in progress.  Remove once all components are updated.
+// ---------------------------------------------------------------------------
 export interface Database {
   public: {
     Tables: {
