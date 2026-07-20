@@ -1,10 +1,8 @@
-"use client"
-
 import { useState, useEffect } from "react"
 import { View, StyleSheet } from "react-native"
-import { supabase } from "./lib/supabase"
-import type { Session } from "@supabase/supabase-js"
-import type { Profile } from "./types/database"
+import { getMyProfile } from "./api/auth"
+import { getAccessToken } from "./api/client"
+import type { Profile } from "./api/types"
 
 // Components
 import Auth from "./components/Auth"
@@ -15,96 +13,66 @@ import MyItems from "./components/MyItems"
 import MessagesList from "./components/MessagesList"
 import ChatScreen from "./components/ChatScreen"
 import Navigation from "./components/Navigation"
+import type { ConversationWithDetails } from "./api/types"
 
 export default function App() {
-  const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("discover")
-  const [selectedConversation, setSelectedConversation] = useState<any>(null)
+  const [selectedConversation, setSelectedConversation] = useState<ConversationWithDetails | null>(null)
   const [shouldRefreshMessages, setShouldRefreshMessages] = useState(false)
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      if (session) {
-        getProfile(session)
-      } else {
-        setLoading(false)
-      }
-    })
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (session) {
-        getProfile(session)
-      } else {
-        setProfile(null)
-        setLoading(false)
-      }
-    })
-
-    return () => subscription.unsubscribe()
+    restoreSession()
   }, [])
 
-  async function getProfile(session: Session) {
+  async function restoreSession() {
     try {
-      const { data, error } = await supabase.from("profiles").select("*").eq("id", session.user.id).single()
-
-      if (error && error.code !== "PGRST116") {
-        throw error
+      const token = await getAccessToken()
+      if (token) {
+        const data = await getMyProfile()
+        setProfile(data)
       }
-
-      setProfile(data)
-    } catch (error) {
-      console.error("Error loading profile:", error)
+    } catch {
+      // Token expired or invalid — stay on auth screen
     } finally {
       setLoading(false)
     }
   }
 
-  const handleProfileComplete = () => {
-    if (session) {
-      getProfile(session)
-    }
+  const handleLogin = (p: Profile) => setProfile(p)
+
+  const handleProfileComplete = async () => {
+    const data = await getMyProfile()
+    setProfile(data)
   }
 
-  const handleItemAdded = () => {
-    setActiveTab("my-items") // Navigate to My Items after adding an item
-  }
+  const handleItemAdded = () => setActiveTab("my-items")
 
-  const handleConversationSelect = (conversation: any) => {
+  const handleConversationSelect = (conversation: ConversationWithDetails) =>
     setSelectedConversation(conversation)
-  }
 
   const handleBackToMessages = () => {
     setSelectedConversation(null)
-    setShouldRefreshMessages(true) // Trigger refresh when returning to messages
+    setShouldRefreshMessages(true)
   }
 
   if (loading) {
     return <View style={styles.loading} />
   }
 
-  // Show auth screen if no session
-  if (!session) {
-    return <Auth />
+  if (!profile) {
+    return <Auth onLogin={handleLogin} />
   }
 
-  // Show profile setup if profile is incomplete
-  if (!profile || !profile.full_name) {
-    return <ProfileComponent session={session} onProfileComplete={handleProfileComplete} />
+  if (!profile.full_name || !profile.username) {
+    return <ProfileComponent profile={profile} onProfileComplete={handleProfileComplete} />
   }
 
-  // Show chat screen if conversation is selected
   if (selectedConversation) {
     return (
       <ChatScreen
-        session={session}
+        profile={profile}
         conversationId={selectedConversation.id}
         otherUser={selectedConversation.other_user}
         onBack={handleBackToMessages}
@@ -112,28 +80,27 @@ export default function App() {
     )
   }
 
-  // Main app content
   const renderActiveTab = () => {
     switch (activeTab) {
       case "discover":
-        return <SwipeCards session={session} />
+        return <SwipeCards profile={profile} />
       case "add":
-        return <AddItem session={session} onItemAdded={handleItemAdded} />
+        return <AddItem profile={profile} onItemAdded={handleItemAdded} />
       case "my-items":
-        return <MyItems session={session} />
+        return <MyItems profile={profile} />
       case "messages":
         return (
           <MessagesList
-            session={session}
+            profile={profile}
             onConversationSelect={handleConversationSelect}
             shouldRefresh={shouldRefreshMessages}
             onRefreshComplete={() => setShouldRefreshMessages(false)}
           />
         )
       case "profile":
-        return <ProfileComponent session={session} onProfileComplete={handleProfileComplete} />
+        return <ProfileComponent profile={profile} onProfileComplete={handleProfileComplete} />
       default:
-        return <SwipeCards session={session} />
+        return <SwipeCards profile={profile} />
     }
   }
 

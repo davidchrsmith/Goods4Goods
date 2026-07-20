@@ -1,83 +1,51 @@
-"use client"
-
 import { useState, useEffect } from "react"
-import { Alert, StyleSheet, View, Text, ScrollView, TouchableOpacity, TextInput } from "react-native"
-import { supabase } from "../lib/supabase"
+import {
+  Alert, StyleSheet, View, Text, ScrollView,
+  TouchableOpacity, TextInput,
+} from "react-native"
+import { getMyProfile, updateProfile, logout } from "../api/auth"
+import { uploadImage } from "../api/items"
+import { ApiError } from "../api/client"
 import { Button, Avatar } from "@rneui/themed"
-import type { Session } from "@supabase/supabase-js"
-import type { Profile } from "../types/database"
 import { Feather } from "@expo/vector-icons"
+import type { Profile } from "../api/types"
 
 interface ProfileProps {
-  session: Session
+  profile: Profile
   onProfileComplete: () => void
+  onLogout?: () => void
 }
 
-export default function ProfileComponent({ session, onProfileComplete }: ProfileProps) {
-  const [loading, setLoading] = useState(true)
-  const [profile, setProfile] = useState<Profile | null>(null)
+export default function ProfileComponent({ profile, onProfileComplete, onLogout }: ProfileProps) {
   const [showSettings, setShowSettings] = useState(false)
 
-  useEffect(() => {
-    if (session) getProfile()
-  }, [session])
+  const formatDate = (dateString: string) =>
+    new Date(dateString).toLocaleDateString()
 
-  async function getProfile() {
-    try {
-      setLoading(true)
-      if (!session?.user) throw new Error("No user on the session!")
-
-      const { data, error, status } = await supabase.from("profiles").select("*").eq("id", session.user.id).single()
-
-      if (error && status !== 406) {
-        throw error
-      }
-
-      if (data) {
-        setProfile(data)
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        Alert.alert("Error", error.message)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString()
-  }
-
-  if (loading) {
+  if (!profile.full_name || !profile.username) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading profile...</Text>
-      </View>
+      <ProfileSettings
+        profile={profile}
+        onBack={() => {}}
+        onProfileUpdated={onProfileComplete}
+        isFirstTime
+      />
     )
   }
 
-  // Show profile setup if profile is incomplete
-  if (!profile || !profile.full_name || !profile.username) {
-    return <ProfileSetup session={session} onProfileComplete={onProfileComplete} />
-  }
-
-  // Show settings if requested
   if (showSettings) {
     return (
       <ProfileSettings
-        session={session}
         profile={profile}
         onBack={() => setShowSettings(false)}
         onProfileUpdated={() => {
-          getProfile()
+          onProfileComplete()
           setShowSettings(false)
         }}
       />
     )
   }
 
-  // Main profile view
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -90,10 +58,8 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
             containerStyle={styles.profileAvatar}
           />
         </View>
-
         <Text style={styles.profileName}>{profile.full_name}</Text>
         <Text style={styles.profileUsername}>@{profile.username}</Text>
-        {/* Remove the email and phone display from header */}
       </View>
 
       <View style={styles.content}>
@@ -116,22 +82,18 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
 
         <View style={styles.infoSection}>
           <Text style={styles.sectionTitle}>Account Information</Text>
-
           <View style={styles.infoItem}>
             <Feather name="calendar" size={20} color="#64748b" />
             <Text style={styles.infoText}>Joined {formatDate(profile.created_at)}</Text>
           </View>
-
           <View style={styles.infoItem}>
             <Feather name="at-sign" size={20} color="#64748b" />
             <Text style={styles.infoText}>@{profile.username}</Text>
           </View>
-
           <View style={styles.infoItem}>
             <Feather name="mail" size={20} color="#64748b" />
-            <Text style={styles.infoText}>{session.user.email}</Text>
+            <Text style={styles.infoText}>{profile.email}</Text>
           </View>
-
           {profile.phone && (
             <View style={styles.infoItem}>
               <Feather name="phone" size={20} color="#64748b" />
@@ -148,10 +110,12 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
             titleStyle={styles.editButtonText}
             icon={<Feather name="edit-2" size={20} color="#3b82f6" style={{ marginRight: 8 }} />}
           />
-
           <Button
             title="Sign Out"
-            onPress={() => supabase.auth.signOut()}
+            onPress={async () => {
+              await logout()
+              onLogout?.()
+            }}
             buttonStyle={styles.signOutButton}
             titleStyle={styles.signOutButtonText}
             icon={<Feather name="log-out" size={20} color="#ef4444" style={{ marginRight: 8 }} />}
@@ -162,28 +126,12 @@ export default function ProfileComponent({ session, onProfileComplete }: Profile
   )
 }
 
-// Profile Setup Component (for first-time users)
-function ProfileSetup({ session, onProfileComplete }: { session: Session; onProfileComplete: () => void }) {
-  return (
-    <ProfileSettings
-      session={session}
-      profile={null}
-      onBack={() => {}}
-      onProfileUpdated={onProfileComplete}
-      isFirstTime={true}
-    />
-  )
-}
-
-// Profile Settings Component
 function ProfileSettings({
-  session,
   profile,
   onBack,
   onProfileUpdated,
   isFirstTime = false,
 }: {
-  session: Session
   profile: Profile | null
   onBack: () => void
   onProfileUpdated: () => void
@@ -198,115 +146,65 @@ function ProfileSettings({
   const [usernameError, setUsernameError] = useState("")
 
   const validateUsername = (text: string) => {
-    const cleanText = text.toLowerCase().replace(/[^a-z0-9_]/g, "")
-    setUsername(cleanText)
-
-    if (cleanText.length < 3) {
+    const clean = text.toLowerCase().replace(/[^a-z0-9_]/g, "")
+    setUsername(clean)
+    if (clean.length > 0 && clean.length < 3) {
       setUsernameError("Username must be at least 3 characters")
-    } else if (cleanText.length > 20) {
-      setUsernameError("Username must be less than 20 characters")
+    } else if (clean.length > 20) {
+      setUsernameError("Username must be 20 characters or fewer")
     } else {
       setUsernameError("")
     }
   }
 
-  const checkUsernameAvailability = async (username: string) => {
-    if (username === profile?.username) return true // Same username is OK
-
-    const { data, error } = await supabase.from("profiles").select("username").eq("username", username).single()
-
-    return !data // Available if no data found
-  }
-
-  const pickImage = async () => {
-    const ImagePicker = await import("expo-image-picker")
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    })
-
-    if (!result.canceled && result.assets[0]) {
-      uploadAvatar(result.assets[0].uri)
-    }
-  }
-
-  const uploadAvatar = async (imageUri: string) => {
+  const pickAndUploadAvatar = async () => {
     try {
+      const ImagePicker = await import("expo-image-picker")
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      })
+      if (result.canceled || !result.assets[0]) return
+
       setUploading(true)
-
-      const FileSystem = await import("expo-file-system")
-      const { decode } = await import("base64-arraybuffer")
-
-      // Read the image file
-      const base64 = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      })
-
-      // Generate unique filename
-      const fileName = `${session.user.id}/avatar-${Date.now()}.jpg`
-
-      // Upload to Supabase Storage
-      const { data, error } = await supabase.storage.from("item-images").upload(fileName, decode(base64), {
-        contentType: "image/jpeg",
-        upsert: true,
-      })
-
-      if (error) throw error
-
-      // Get public URL
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from("item-images").getPublicUrl(fileName)
-
-      setAvatarUrl(publicUrl)
-    } catch (error) {
-      console.error("Error uploading avatar:", error)
+      const url = await uploadImage(result.assets[0].uri)
+      setAvatarUrl(url)
+    } catch (err) {
       Alert.alert("Upload Error", "Failed to upload profile picture. Please try again.")
     } finally {
       setUploading(false)
     }
   }
 
-  async function updateProfile() {
+  async function saveProfile() {
+    if (!fullName.trim()) {
+      Alert.alert("Error", "Full name is required")
+      return
+    }
+    if (!username.trim()) {
+      Alert.alert("Error", "Username is required")
+      return
+    }
+    if (usernameError) {
+      Alert.alert("Error", usernameError)
+      return
+    }
+
+    setLoading(true)
     try {
-      setLoading(true)
-      if (!session?.user) throw new Error("No user on the session!")
-
-      // Check username availability
-      if (username && !(await checkUsernameAvailability(username))) {
-        Alert.alert("Username Taken", "This username is already taken. Please choose another.")
-        return
-      }
-
-      const updates = {
-        id: session.user.id,
+      await updateProfile({
         full_name: fullName.trim(),
-        username: username.trim() || null,
+        username: username.trim(),
         phone: phone.trim() || null,
         avatar_url: avatarUrl,
-        updated_at: new Date().toISOString(),
-      }
-
-      const { error } = await supabase.from("profiles").upsert(updates)
-
-      if (error) {
-        if (error.code === "23505") {
-          // Unique constraint violation
-          Alert.alert("Username Taken", "This username is already taken. Please choose another.")
-          return
-        }
-        throw error
-      }
-
+      })
       Alert.alert("Success", "Profile updated successfully!")
       onProfileUpdated()
-    } catch (error) {
-      if (error instanceof Error) {
-        Alert.alert("Error", error.message)
-      }
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to update profile"
+      Alert.alert("Error", message)
     } finally {
       setLoading(false)
     }
@@ -320,18 +218,22 @@ function ProfileSettings({
             <Feather name="arrow-left" size={24} color="#1e293b" />
           </TouchableOpacity>
         )}
-
-        <Text style={styles.settingsTitle}>{isFirstTime ? "Complete Your Profile" : "Edit Profile"}</Text>
-
-        {isFirstTime && <Text style={styles.settingsSubtitle}>Tell us a bit about yourself</Text>}
+        <Text style={styles.settingsTitle}>
+          {isFirstTime ? "Complete Your Profile" : "Edit Profile"}
+        </Text>
+        {isFirstTime && (
+          <Text style={styles.settingsSubtitle}>Tell us a bit about yourself</Text>
+        )}
       </View>
 
       <View style={styles.form}>
-        {/* Profile Picture Section */}
         <View style={styles.avatarSection}>
           <Text style={styles.sectionLabel}>Profile Picture</Text>
-
-          <TouchableOpacity onPress={pickImage} disabled={uploading} style={styles.avatarUploadContainer}>
+          <TouchableOpacity
+            onPress={pickAndUploadAvatar}
+            disabled={uploading}
+            style={styles.avatarUploadContainer}
+          >
             <Avatar
               size={100}
               rounded
@@ -339,22 +241,18 @@ function ProfileSettings({
               icon={!avatarUrl ? { name: "user", type: "feather", size: 40 } : undefined}
               containerStyle={styles.avatarUpload}
             />
-
             {uploading && (
               <View style={styles.uploadingOverlay}>
                 <Text style={styles.uploadingText}>Uploading...</Text>
               </View>
             )}
-
             <View style={styles.cameraIcon}>
               <Feather name="camera" size={16} color="white" />
             </View>
           </TouchableOpacity>
-
           <Text style={styles.avatarHint}>Tap to change profile picture</Text>
         </View>
 
-        {/* Form Fields */}
         <View style={styles.inputSection}>
           <Text style={styles.inputLabel}>Full Name *</Text>
           <View style={styles.inputContainer}>
@@ -384,7 +282,9 @@ function ProfileSettings({
             />
           </View>
           {usernameError ? <Text style={styles.errorText}>{usernameError}</Text> : null}
-          <Text style={styles.inputHint}>Letters, numbers, and underscores only. 3-20 characters.</Text>
+          <Text style={styles.inputHint}>
+            Letters, numbers, and underscores only. 3-20 characters.
+          </Text>
         </View>
 
         <View style={styles.inputSection}>
@@ -398,29 +298,14 @@ function ProfileSettings({
               placeholder="+1 (555) 123-4567"
               placeholderTextColor="#94a3b8"
               keyboardType="phone-pad"
-              editable={true}
             />
           </View>
-        </View>
-
-        <View style={styles.inputSection}>
-          <Text style={styles.inputLabel}>Email Address</Text>
-          <View style={[styles.inputContainer, styles.disabledInput]}>
-            <Feather name="mail" size={20} color="#94a3b8" style={styles.inputIcon} />
-            <TextInput
-              style={[styles.textInput, styles.disabledText]}
-              value={session.user.email || ""}
-              editable={false}
-              placeholderTextColor="#94a3b8"
-            />
-          </View>
-          <Text style={styles.inputHint}>Email cannot be changed</Text>
         </View>
 
         <Button
-          title={loading ? "Updating..." : isFirstTime ? "Complete Profile" : "Save Changes"}
-          onPress={updateProfile}
-          disabled={loading || !fullName.trim() || !username.trim() || !!usernameError || uploading}
+          title={loading ? "Saving..." : isFirstTime ? "Complete Profile" : "Save Changes"}
+          disabled={loading || uploading}
+          onPress={saveProfile}
           buttonStyle={styles.saveButton}
           titleStyle={styles.saveButtonText}
         />
@@ -430,218 +315,69 @@ function ProfileSettings({
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#f8fafc",
-  },
-  loadingText: {
-    fontSize: 18,
-    color: "#64748b",
-  },
-  header: {
-    alignItems: "center",
-    paddingTop: 60,
-    paddingBottom: 30,
-    backgroundColor: "white",
-  },
-  profileImageContainer: {
-    marginBottom: 16,
-  },
-  profileAvatar: {
-    backgroundColor: "#e2e8f0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  profileName: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#1e293b",
-    marginBottom: 4,
-  },
-  profileUsername: {
-    fontSize: 18,
-    color: "#3b82f6",
-    fontWeight: "600",
-    marginBottom: 4,
-  },
-  profileEmail: {
-    fontSize: 16,
-    color: "#64748b",
-    marginBottom: 4,
-  },
-  profilePhone: {
-    fontSize: 16,
-    color: "#64748b",
-  },
-  content: {
-    padding: 20,
-  },
+  container: { flex: 1, backgroundColor: "#f8fafc" },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { fontSize: 16, color: "#64748b" },
+  header: { alignItems: "center", paddingTop: 60, paddingBottom: 24, backgroundColor: "white" },
+  profileImageContainer: { marginBottom: 16 },
+  profileAvatar: { borderWidth: 3, borderColor: "#e2e8f0" },
+  profileName: { fontSize: 24, fontWeight: "bold", color: "#1e293b", marginBottom: 4 },
+  profileUsername: { fontSize: 16, color: "#64748b" },
+  content: { padding: 20 },
   statsContainer: {
     flexDirection: "row",
     backgroundColor: "white",
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  statItem: {
-    flex: 1,
-    alignItems: "center",
-  },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#1e293b",
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: "#64748b",
-    textAlign: "center",
-  },
-  statDivider: {
-    width: 1,
-    backgroundColor: "#e2e8f0",
-    marginHorizontal: 20,
-  },
+  statItem: { flex: 1, alignItems: "center" },
+  statNumber: { fontSize: 24, fontWeight: "bold", color: "#1e293b" },
+  statLabel: { fontSize: 12, color: "#64748b", marginTop: 4 },
+  statDivider: { width: 1, backgroundColor: "#e2e8f0" },
   infoSection: {
     backgroundColor: "white",
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#1e293b",
-    marginBottom: 16,
-  },
-  infoItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-  },
-  infoText: {
-    fontSize: 16,
-    color: "#64748b",
-    marginLeft: 12,
-  },
-  actionsSection: {
-    gap: 12,
-  },
+  sectionTitle: { fontSize: 16, fontWeight: "600", color: "#1e293b", marginBottom: 16 },
+  infoItem: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  infoText: { fontSize: 14, color: "#374151", marginLeft: 12 },
+  actionsSection: { gap: 12 },
   editButton: {
-    backgroundColor: "transparent",
+    backgroundColor: "white",
     borderWidth: 1,
     borderColor: "#3b82f6",
     borderRadius: 12,
-    paddingVertical: 16,
+    paddingVertical: 14,
   },
-  editButtonText: {
-    color: "#3b82f6",
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  editButtonText: { color: "#3b82f6", fontWeight: "600" },
   signOutButton: {
-    backgroundColor: "transparent",
+    backgroundColor: "white",
     borderWidth: 1,
     borderColor: "#ef4444",
     borderRadius: 12,
-    paddingVertical: 16,
+    paddingVertical: 14,
   },
-  signOutButtonText: {
-    color: "#ef4444",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  // Settings styles
-  settingsHeader: {
-    alignItems: "center",
-    paddingTop: 60,
-    paddingBottom: 30,
-    paddingHorizontal: 20,
-    backgroundColor: "white",
-    position: "relative",
-  },
-  backButton: {
-    position: "absolute",
-    left: 20,
-    top: 70,
-  },
-  settingsTitle: {
-    fontSize: 24,
-    fontWeight: "bold",
-    color: "#1e293b",
-    marginBottom: 8,
-  },
-  settingsSubtitle: {
-    fontSize: 16,
-    color: "#64748b",
-    textAlign: "center",
-  },
-  form: {
-    backgroundColor: "white",
-    margin: 20,
-    borderRadius: 16,
-    padding: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  avatarSection: {
-    alignItems: "center",
-    marginBottom: 32,
-  },
-  sectionLabel: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1e293b",
-    marginBottom: 16,
-  },
-  avatarUploadContainer: {
-    position: "relative",
-    marginBottom: 8,
-  },
-  avatarUpload: {
-    backgroundColor: "#e2e8f0",
-  },
+  signOutButtonText: { color: "#ef4444", fontWeight: "600" },
+  settingsHeader: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 24 },
+  backButton: { marginBottom: 16 },
+  settingsTitle: { fontSize: 28, fontWeight: "bold", color: "#1e293b" },
+  settingsSubtitle: { fontSize: 16, color: "#64748b", marginTop: 4 },
+  form: { padding: 20 },
+  avatarSection: { alignItems: "center", marginBottom: 32 },
+  sectionLabel: { fontSize: 14, fontWeight: "600", color: "#374151", marginBottom: 12 },
+  avatarUploadContainer: { position: "relative" },
+  avatarUpload: { borderWidth: 3, borderColor: "#e2e8f0" },
   uploadingOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
     borderRadius: 50,
     justifyContent: "center",
     alignItems: "center",
   },
-  uploadingText: {
-    color: "white",
-    fontSize: 12,
-    fontWeight: "600",
-  },
+  uploadingText: { color: "white", fontSize: 12 },
   cameraIcon: {
     position: "absolute",
     bottom: 0,
@@ -652,70 +388,24 @@ const styles = StyleSheet.create({
     height: 32,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 3,
-    borderColor: "white",
   },
-  avatarHint: {
-    fontSize: 12,
-    color: "#64748b",
-    textAlign: "center",
-  },
-  inputSection: {
-    marginBottom: 20,
-  },
-  inputLabel: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1e293b",
-    marginBottom: 8,
-  },
+  avatarHint: { fontSize: 12, color: "#94a3b8", marginTop: 8 },
+  inputSection: { marginBottom: 20 },
+  inputLabel: { fontSize: 14, fontWeight: "600", color: "#374151", marginBottom: 8 },
   inputContainer: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
+    backgroundColor: "white",
     borderRadius: 12,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#f8fafc",
-  },
-  disabledInput: {
-    backgroundColor: "#f1f5f9",
+    borderWidth: 1,
     borderColor: "#e2e8f0",
   },
-  errorInput: {
-    borderColor: "#ef4444",
-    backgroundColor: "#fef2f2",
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  textInput: {
-    flex: 1,
-    fontSize: 16,
-    color: "#1e293b",
-  },
-  disabledText: {
-    color: "#94a3b8",
-  },
-  inputHint: {
-    fontSize: 12,
-    color: "#94a3b8",
-    marginTop: 4,
-  },
-  errorText: {
-    fontSize: 12,
-    color: "#ef4444",
-    marginTop: 4,
-  },
-  saveButton: {
-    backgroundColor: "#3b82f6",
-    borderRadius: 12,
-    paddingVertical: 16,
-    marginTop: 16,
-  },
-  saveButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  errorInput: { borderColor: "#ef4444" },
+  inputIcon: { marginRight: 12 },
+  textInput: { flex: 1, paddingVertical: 14, fontSize: 16, color: "#1e293b" },
+  inputHint: { fontSize: 12, color: "#94a3b8", marginTop: 4 },
+  errorText: { fontSize: 12, color: "#ef4444", marginTop: 4 },
+  saveButton: { backgroundColor: "#3b82f6", borderRadius: 12, paddingVertical: 16, marginTop: 16 },
+  saveButtonText: { fontSize: 16, fontWeight: "600" },
 })

@@ -1,147 +1,70 @@
-"use client"
-
 import { useState } from "react"
 import { Alert, StyleSheet, View, Text, TouchableOpacity } from "react-native"
-import { supabase } from "../lib/supabase"
+import { login, register, lookupEmailByUsername } from "../api/auth"
+import { ApiError } from "../api/client"
 import { Button, Input } from "@rneui/themed"
+import type { Profile } from "../api/types"
 
-export default function Auth() {
+interface AuthProps {
+  onLogin: (profile: Profile) => void
+}
+
+export default function Auth({ onLogin }: AuthProps) {
   const [emailOrUsername, setEmailOrUsername] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [isSignUp, setIsSignUp] = useState(false)
 
-  async function signInWithEmailOrUsername() {
+  async function handleSignIn() {
     if (!emailOrUsername.trim() || !password.trim()) {
       Alert.alert("Error", "Please enter both email/username and password")
       return
     }
 
     setLoading(true)
-
     try {
       let email = emailOrUsername.trim()
 
-      // Check if input is a username (no @ symbol)
-      if (!emailOrUsername.includes("@")) {
-        console.log("Looking up username:", emailOrUsername.toLowerCase().trim())
-
-        // Look up email by username using RPC function
-        const { data: userEmail, error: lookupError } = await supabase.rpc("get_email_by_username", {
-          input_username: emailOrUsername.toLowerCase().trim(),
-        })
-
-        if (lookupError) {
-          console.error("Username lookup error:", lookupError)
-          Alert.alert("Error", "Failed to look up username. Please try again or use your email address.")
+      if (!email.includes("@")) {
+        const found = await lookupEmailByUsername(email)
+        if (!found) {
+          Alert.alert("Username Not Found", "That username doesn't exist. Try your email address instead.")
           return
         }
-
-        if (!userEmail) {
-          Alert.alert(
-            "Username Not Found",
-            "The username you entered doesn't exist. Please check your username or try using your email address.",
-          )
-          return
-        }
-
-        email = userEmail
-        console.log("Found email for username:", email)
+        email = found
       }
 
-      console.log("Attempting sign in with email:", email)
-
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email,
-        password: password,
-      })
-
-      if (error) {
-        console.error("Sign in error:", error)
-
-        // Provide specific error messages
-        if (error.message.includes("Invalid login credentials")) {
-          Alert.alert(
-            "Invalid Credentials",
-            "The email/username or password you entered is incorrect. Please try again.",
-          )
-        } else if (error.message.includes("Email not confirmed")) {
-          Alert.alert(
-            "Email Not Verified",
-            "Please check your email and click the verification link before signing in.",
-          )
-        } else if (error.message.includes("Too many requests")) {
-          Alert.alert("Too Many Attempts", "Too many sign-in attempts. Please wait a few minutes before trying again.")
-        } else if (error.message.includes("signup is disabled")) {
-          Alert.alert("Account Required", "Please create an account first.")
-        } else {
-          Alert.alert("Sign In Failed", error.message || "An error occurred during sign in. Please try again.")
-        }
-        return
-      }
-
-      console.log("Sign in successful")
-      // Success - the auth state change will be handled by the app
-    } catch (error) {
-      console.error("Unexpected error:", error)
-      Alert.alert("Error", "An unexpected error occurred. Please try again.")
+      const { user } = await login(email, password)
+      onLogin(user)
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "An unexpected error occurred"
+      Alert.alert("Sign In Failed", message)
     } finally {
       setLoading(false)
     }
   }
 
-  async function signUpWithEmail() {
+  async function handleSignUp() {
     if (!emailOrUsername.trim() || !password.trim()) {
       Alert.alert("Error", "Please enter both email and password")
       return
     }
+    if (!emailOrUsername.includes("@")) {
+      Alert.alert("Error", "Please enter a valid email address to sign up")
+      return
+    }
+    if (password.length < 6) {
+      Alert.alert("Error", "Password must be at least 6 characters")
+      return
+    }
 
     setLoading(true)
-
-    if (!emailOrUsername.includes("@")) {
-      Alert.alert("Error", "Please enter a valid email address for sign up")
-      setLoading(false)
-      return
-    }
-
-    if (password.length < 6) {
-      Alert.alert("Error", "Password must be at least 6 characters long")
-      setLoading(false)
-      return
-    }
-
     try {
-      const { error } = await supabase.auth.signUp({
-        email: emailOrUsername.trim(),
-        password: password,
-      })
-
-      if (error) {
-        console.error("Sign up error:", error)
-
-        // Provide specific error messages
-        if (error.message.includes("User already registered")) {
-          Alert.alert("Account Exists", "An account with this email already exists. Please sign in instead.")
-        } else if (error.message.includes("Password should be at least")) {
-          Alert.alert("Weak Password", "Password must be at least 6 characters long.")
-        } else if (error.message.includes("Invalid email")) {
-          Alert.alert("Invalid Email", "Please enter a valid email address.")
-        } else if (error.message.includes("signup is disabled")) {
-          Alert.alert("Sign Up Disabled", "New account creation is currently disabled. Please contact support.")
-        } else {
-          Alert.alert("Sign Up Failed", error.message || "An error occurred during sign up. Please try again.")
-        }
-        return
-      }
-
-      Alert.alert(
-        "Success",
-        "Account created successfully! Please check your email for a verification link before signing in.",
-        [{ text: "OK", onPress: () => setIsSignUp(false) }],
-      )
-    } catch (error) {
-      console.error("Unexpected error:", error)
-      Alert.alert("Error", "An unexpected error occurred. Please try again.")
+      const { user } = await register(emailOrUsername.trim(), password)
+      onLogin(user)
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "An unexpected error occurred"
+      Alert.alert("Sign Up Failed", message)
     } finally {
       setLoading(false)
     }
@@ -158,9 +81,9 @@ export default function Auth() {
         <Input
           label={isSignUp ? "Email" : "Email or Username"}
           leftIcon={{ type: "feather", name: isSignUp ? "mail" : "user" }}
-          onChangeText={(text) => setEmailOrUsername(text)}
+          onChangeText={setEmailOrUsername}
           value={emailOrUsername}
-          placeholder={isSignUp ? "email@address.com" : "email@address.com or username"}
+          placeholder={isSignUp ? "email@address.com" : "email or username"}
           keyboardType={isSignUp ? "email-address" : "default"}
           autoCapitalize="none"
           containerStyle={styles.inputContainer}
@@ -170,9 +93,9 @@ export default function Auth() {
         <Input
           label="Password"
           leftIcon={{ type: "feather", name: "lock" }}
-          onChangeText={(text) => setPassword(text)}
+          onChangeText={setPassword}
           value={password}
-          secureTextEntry={true}
+          secureTextEntry
           placeholder="Enter your password"
           autoCapitalize="none"
           containerStyle={styles.inputContainer}
@@ -182,7 +105,7 @@ export default function Auth() {
         <Button
           title={loading ? "Loading..." : isSignUp ? "Sign Up" : "Sign In"}
           disabled={loading}
-          onPress={isSignUp ? signUpWithEmail : signInWithEmailOrUsername}
+          onPress={isSignUp ? handleSignUp : handleSignIn}
           buttonStyle={styles.primaryButton}
           titleStyle={styles.buttonText}
         />
@@ -248,6 +171,5 @@ const styles = StyleSheet.create({
   switchText: {
     color: "#3b82f6",
     fontSize: 14,
-    fontWeight: "500",
   },
 })
